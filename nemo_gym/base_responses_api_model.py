@@ -69,6 +69,7 @@ from nemo_gym.server_utils import (
 )
 from nemo_gym.token_id_capture import (
     CaptureContext,
+    TokenIdCaptureConfig,
     capture_tokens,
     installed_token_sink,
     reset_token_sink,
@@ -1296,7 +1297,11 @@ def install_model_call_capture(
         token_store=token_store,
     )
     if token_store is not None:
-        install_token_capture_routes(app, token_store)
+        install_token_capture_routes(
+            app,
+            token_store,
+            read_token=TokenIdCaptureConfig.model_validate(global_config_dict or {}).token_id_capture_read_token,
+        )
 
 
 # --- Run-level capture helpers (rollout-collection side) ---
