@@ -20,7 +20,7 @@ Two readers implement the same async ``read`` method:
 * ``LocalTokenReader`` reads the store's files directly. Use it when the reader
   runs in the same process (or box) as the model server that wrote them.
 * ``HttpTokenReader`` reads over the model server's ``/ng-capture/tokens``
-  route. Use it when the trainer is not co-located with the store -- the common
+  route. Use it when the trainer is not co-located with the store, the common
   case once serving and training run on different nodes. It goes through Gym's
   shared aiohttp client, so reading at high rollout concurrency never stalls the
   event loop.

@@ -102,7 +102,7 @@ def test_per_request_marks_the_same_generated_tokens():
     assert per_req_tokens == sorted([10, 11, 12, 13, 14])
 
 
-def test_projection_is_nemo_rl_contiguous():
+def test_projection_is_prefix_contiguous():
     out = prefix_merging(APPEND_ONLY)
     response = project_main_chain_response("t0-r0", out, model="m")
     assert [len(i["prompt_token_ids"]) for i in response["output"]] == [3, 7, 9]
@@ -188,7 +188,7 @@ def test_projection_carries_content_and_stays_contiguous():
 
 def test_projection_handles_content_only_leading_item():
     # A single call whose output is an assistant text message (no token fields) followed by a
-    # tool call that carries the token fields -- the real shape when a model narrates before a
+    # tool call that carries the token fields, the real shape when a model narrates before a
     # tool call. Usage must be read from the token-bearing item, not output[0].
     entry = TokenEntry(
         rollout_id="t0-r0",
@@ -283,7 +283,7 @@ def test_a_short_side_call_does_not_replace_the_rollout():
     definitions. Entries are processed by increasing prompt length, so the title
     call is the first root; selecting the main chain from the first root would
     deliver the title and relabel the whole rollout a branch. Nothing would
-    error -- the trainer would receive a contiguous, token-bearing response
+    error, because the trainer would receive a contiguous, token-bearing response
     containing a generated title, with the rollout's reward attached.
     """
     title = _entry("title", [9000, 9001], [7, 7, 7])
@@ -319,7 +319,7 @@ def test_post_compaction_chain_is_reported_as_dropped():
 
 
 def test_malformed_capture_masks_the_rollout_instead_of_raising(tmp_path):
-    """The callers are a rollout-collection loop and NeMo-RL's training loop; an
+    """The callers are a rollout-collection loop and a training framework's loop; an
     escaping exception there kills a whole step's batch rather than dropping one
     sample."""
     store = TokenCaptureStore(tmp_path)

@@ -141,7 +141,7 @@ def _resolve_parent(
     The recorded link is verified rather than trusted: the child's prompt must
     actually start with the parent's cumulative sequence, checked by digest so
     it costs a hash of a prefix instead of comparing whole arrays. A stale store
-    -- a rerun that appended onto a previous attempt's records -- fails here and
+    (a rerun that appended onto a previous attempt's records) fails here and
     falls back rather than merging two attempts into one trajectory.
     """
     prompt = list(node.entry.prompt_token_ids)
@@ -224,8 +224,8 @@ def prefix_merging(entries: list[TokenEntry]) -> BuildOutput:
     #
     # A recorded parent link settles this exactly: a later call names the sibling the harness actually
     # kept, so the other is provably unused. Without one we fall back to "the sibling a later call
-    # extended wins". Neither can resolve a retry of the FINAL call -- there is no later call to name
-    # the survivor -- so that case is flagged as unresolved rather than tie-broken silently, and the
+    # extended wins". Neither can resolve a retry of the last call, because no later call names the
+    # survivor, so that case is flagged as unresolved rather than tie-broken silently, and the
     # caller masks the rollout instead of training on a generation the client may never have received.
     unresolved_retries: list[str] = []
     # Group by parent identity. Roots share the ROOTS key on purpose: a retry of a rollout's first
@@ -337,8 +337,8 @@ def project_chain_to_output_items(chain: Chain) -> list[dict]:
     """Project the chain into content-bearing Responses output items whose prompts are
     contiguous. For each call, emit its captured output items (assistant text, tool
     calls preserved) and set the contiguous prompt on the item that carries the
-    generation, so each generated item's prompt extends the previous one — the shape
-    a trainer ingests, with the text intact for anything that scores it. Falls back to a
+    generation, so each generated item's prompt extends the previous one. That is the
+    shape a trainer ingests, with the text intact for anything that scores it. Falls back to a
     synthesized token-only item only when a call captured no content items."""
     items: list[dict] = []
     cumulative = list(chain.root_prompt)

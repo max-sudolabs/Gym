@@ -60,7 +60,7 @@ class TokenIdCaptureConfig(BaseModel):
 
     # Bearer token required by the token read route. The route serves a rollout's raw training
     # tokens on the same app the harness calls to generate, which is fine inside a trusted cluster
-    # and not fine once the harness runs in a sandbox whose only egress is this server -- it could
+    # and not fine once the harness runs in a sandbox whose only egress is this server, where it could
     # read its own training data, or another rollout's. Set this before the sandbox work; when unset
     # the route stays open and logs a warning once.
     token_id_capture_read_token: str | None = None

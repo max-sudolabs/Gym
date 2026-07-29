@@ -23,7 +23,7 @@ because a killed box must not lose a rollout's training tokens.
 
 Concurrency is per file, not global: there is deliberately no process-wide lock.
 Every model call appends to its own rollout's file, so a global lock would
-serialize all of them behind one fsync -- on a shared/network filesystem that
+serialize all of them behind one fsync. On a shared or network filesystem that
 collapses throughput to ~1/fsync-latency regardless of core count. The per-file
 flock keeps concurrent writers to one rollout correct while letting writes to
 different rollouts proceed in parallel.
@@ -69,8 +69,8 @@ class TokenCaptureStore:
     def mark_incomplete(self, rollout_id: str, reason: str = "") -> None:
         """Record that a call was lost.
 
-        Capture is best-effort per call -- a bad payload must never break the
-        harness -- but a rollout that captured 9 of 10 calls must not be
+        Capture is best effort per call, because a bad payload must never break the
+        harness, but a rollout that captured 9 of 10 calls must not be
         indistinguishable from a complete one. The marker is a file rather than
         an in-process counter because the writer (model server) and the reader
         (rollout collection, or the trainer) are different processes.
@@ -86,7 +86,7 @@ class TokenCaptureStore:
         return self.incomplete_path_for(rollout_id).exists()
 
     def append(self, entry: TokenEntry) -> None:
-        """Append one entry and fsync. Blocking file IO -- callers on the event
+        """Append one entry and fsync. Blocking file IO, so callers on the event
         loop must offload it (e.g. ``asyncio.to_thread``)."""
         line = orjson.dumps(entry.model_dump(), option=orjson.OPT_APPEND_NEWLINE)
         path = self.path_for(entry.rollout_id)

@@ -1100,7 +1100,7 @@ class _CaptureMiddleware:
         model_call_id = uuid4().hex
 
         # Hand the model server a per-request token sink keyed to this call. It records token ids
-        # from its complete response (the middleware can't -- token ids are dropped on the SSE wire).
+        # from its complete response. The middleware cannot: token ids are dropped on the SSE wire.
         sink_token = None
         if token_sink is not None:
             sink_token = set_token_sink(

@@ -65,7 +65,7 @@ class TestBaseResponsesAPIAgent:
 
     def test_token_capture_prefix_is_scoped_to_participating_agents(self) -> None:
         # Training token capture correlates a call only when the run-level switch is on AND the agent
-        # opted in -- native agents (opt-out) carry token ids inline and must not be correlated here.
+        # opted in. Native agents (opt-out) carry token ids inline and must not be correlated here.
         body = {"_ng_task_index": 0, "_ng_rollout_index": 0}
         gc = {"token_id_capture_enabled": True}
         assert self._agent(gc, token_id_capture=False).rollout_id_from_run(body) is None

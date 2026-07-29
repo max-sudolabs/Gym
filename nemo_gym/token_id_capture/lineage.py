@@ -37,7 +37,7 @@ nothing depends on which dialect the harness speaks.
 
 The index is a map keyed by call, not a running cursor, so it is a tree and
 forks cost nothing. Two sub-agents branching from one parent both resolve to it
-and both get the same prefix -- which is exactly right, and is why the prefix to
+and both get the same prefix, which is correct, and is why the prefix to
 supply is ``cum(parent)`` and not ``cum(previous call)``. Entries are added and
 never mutated, so concurrent sub-agents cannot corrupt each other's lineage.
 """
@@ -56,8 +56,8 @@ _FINGERPRINT_DOMAIN = b"nemo-gym-lineage"
 def canonicalize_tool_arguments(value: Any) -> str:
     """Normalize a tool call's arguments for comparison only.
 
-    Harnesses re-serialize tool-call arguments between turns -- compact one turn,
-    pretty-printed the next -- so the same call does not compare equal to itself.
+    Harnesses re-serialize tool-call arguments between turns, compact one turn and
+    pretty-printed the next, so the same call does not compare equal to itself.
     Comparison is done on sorted-key, separator-normalized JSON; the model's
     original string is what stays in the record and is never rewritten.
     """
@@ -79,7 +79,7 @@ def canonicalize_tool_arguments(value: Any) -> str:
 def _text_of(content: Any) -> str:
     """Flatten a message's *text* content, across the shapes the dialects use.
 
-    Tool calls are deliberately NOT folded in here -- see ``_tools_of``. The
+    Tool calls are deliberately not folded in here; see ``_tools_of``. The
     dialects carry them in different places, so they have to be normalized
     separately or the same turn hashes differently depending on which side is
     looking at it.
@@ -189,7 +189,7 @@ class RolloutLineage:
     def resolve(self, messages: list[dict]) -> LineageNode | None:
         """The call this request continues, or ``None``.
 
-        ``None`` for a new root (nothing matches -- a fresh conversation, or one
+        ``None`` for a new root (nothing matches: a fresh conversation, or one
         the harness rewrote) and, deliberately, for an ambiguous match: if two
         recorded calls produced byte-identical output we cannot tell which one
         this continues, and guessing would attribute tokens to the wrong parent.
@@ -233,7 +233,7 @@ class LineageIndex:
 
     Eviction is oldest-first by insertion, and runs on access rather than on
     write, so the budget is exceeded by at most the single call recorded after
-    the last check -- one ``cum_len``, ~4.5 MiB at 131k. A rollout still in
+    the last check, one ``cum_len``, about 4.5 MiB at 131k. A rollout still in
     flight can be evicted under pressure; that is intended, and it degrades to
     prefix inference rather than to a wrong parent.
     """
@@ -269,7 +269,7 @@ class LineageIndex:
     def drop(self, rollout_id: str) -> None:
         """Release a rollout's lineage early.
 
-        Unused by Gym's own path -- the model server has no signal that a rollout
+        Unused by Gym's own path, because the model server has no signal that a rollout
         finished. A framework that implements ``TokenSink`` in the same process
         does have one, and should call this when it retires the records.
         """
@@ -283,7 +283,7 @@ def assistant_turn_from_output_items(output_items: list[dict]) -> dict:
     """Rebuild the assistant turn a harness will echo back, from a served response.
 
     Indexing a call means fingerprinting the conversation a *continuation* of it
-    would carry -- which is this request's messages plus the turn we just
+    would carry, which is this request's messages plus the turn we just
     produced. The next request only matches if that turn is reconstructed in the
     shape the harness echoes: text content, and tool calls with their arguments.
 

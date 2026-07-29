@@ -95,7 +95,7 @@ class SimpleResponsesAPIAgent(BaseResponsesAPIAgent, AggregateMetricsMixin, Simp
         Two independent capture paths consume the same prefix:
         - Eval model-call capture (``observability_enabled``), which applies to every agent.
         - Training token capture (``token_id_capture_enabled``), which applies only to agents
-          that opt in with the per-agent ``token_id_capture`` flag -- native agents carry token
+          that opt in with the per-agent ``token_id_capture`` flag. Native agents carry token
           ids inline and do not need the store, so they do not emit the prefix for token capture.
 
         Fail closed: an agent whose client carries no usable global config runs uncorrelated

@@ -16,9 +16,9 @@
 """Served-layer token capture for one model call.
 
 Token ids are dropped on the wire for streaming responses (Anthropic
-``/v1/messages``, OpenAI chat SSE), so the capture middleware -- which only sees
-the streamed bytes -- cannot record them. But the model server holds the
-complete response WITH token ids for a moment, just before it synthesizes the
+``/v1/messages``, OpenAI chat SSE), so the capture middleware, which only sees
+the streamed bytes, cannot record them. But the model server holds the
+complete response, token ids included, for a moment before it synthesizes the
 SSE stream. The middleware therefore hands the model server a per-request "token
 sink" through a request-scoped ContextVar; the server calls ``capture_tokens``
 on its complete response and the sink writes a ``TokenEntry``.
@@ -118,9 +118,8 @@ async def capture_tokens(
 
     ``response`` is a served response as a pydantic model or dict. No-op when no
     sink is active (untagged traffic) or the response carries no token ids. The
-    write is offloaded and awaited, so the entry is durable before the model call
-    returns -- a post-rollout reader always sees it, with no background writer to
-    drain.
+    write is awaited, so the entry is durable before the model call returns and a
+    post-rollout reader always sees it, with no background writer to drain.
     """
     sink = _TOKEN_SINK.get()
     if sink is None:
@@ -159,7 +158,7 @@ async def capture_tokens(
             generation_log_probs=info.get("generation_log_probs") or [],
             routed_experts=info.get("routed_experts"),
             # Keep the content (assistant text, tool calls) so the trajectory the trainer
-            # reads is not token-only -- text-based penalties need it.
+            # reads is not token-only, since text-based penalties need it.
             output_items=content_items,
             token_item_index=token_item_index,
             created_at=time.time(),

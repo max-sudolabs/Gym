@@ -687,7 +687,7 @@ def test_fingerprint_ignores_non_assistant_turns():
 
 
 def test_fingerprint_survives_tool_argument_reserialization():
-    """Harnesses re-serialize tool-call arguments between turns -- compact one
+    """Harnesses re-serialize tool-call arguments between turns, compact one
     turn, pretty-printed the next. Without canonicalization the same call would
     not compare equal to itself and every tool-using turn would miss."""
     compact = [
@@ -737,7 +737,7 @@ def test_lineage_is_a_tree_so_forks_get_the_parent_not_the_previous_call():
 
     A running cursor ("the last call") would hand the second branch a prefix
     containing the first branch's generation, and the splice applies a supplied
-    prefix unconditionally -- so that would be silently wrong, not just wasteful.
+    prefix unconditionally, so that would be silently wrong rather than merely wasteful.
     """
     lineage = RolloutLineage()
     shared = [{"role": "user", "content": "q"}, {"role": "assistant", "content": "plan"}]
@@ -790,7 +790,7 @@ def test_fingerprint_matches_across_openai_and_anthropic_tool_shapes():
     We record the turn we produced in OpenAI shape (``tool_calls``), but Claude
     Code echoes it back in Anthropic shape (``content`` blocks of type
     ``tool_use``). If those hash differently, the parent is never resolved for
-    exactly the turns that create multi-turn rollouts -- which is what happened
+    exactly the turns that create multi-turn rollouts, which is what happened
     in the first live multi-turn run: every record came back with
     ``parent_call_id: None`` even though the calls chained perfectly.
     """

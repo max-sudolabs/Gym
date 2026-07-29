@@ -4873,7 +4873,7 @@ class TestPrefixSupply:
         """Two sub-agents branching from one parent must both get cum(parent).
 
         A running cursor would hand the second branch a prefix containing the
-        first branch's generation -- which the splice would apply without
+        first branch's generation, which the splice would apply without
         complaint, generating from a conversation that never happened.
         """
         server = self._server(monkeypatch, enabled=True)
@@ -4902,7 +4902,7 @@ class TestPrefixSupply:
 
         A reasoning model's chat template drops earlier thinking when it renders
         a later prompt, so the re-rendered prompt cannot extend the previous
-        prompt-plus-generation -- the tokens are gone, not merely re-split. The
+        prompt-plus-generation: the tokens are gone, not merely re-split. The
         supplied prefix comes from the recording, so those tokens are restored
         and the chain survives.
         """
@@ -4925,7 +4925,7 @@ class TestPrefixSupplyAccounting:
     """Supply must be auditable after the fact.
 
     Without this the only evidence supply fired is that chains happen to be
-    contiguous -- which they often are anyway, so a supply run and a non-supply
+    contiguous, which they often are anyway, so a supply run and a non-supply
     run look identical. That ambiguity made the first live supply experiment
     inconclusive.
     """
@@ -4970,7 +4970,7 @@ class TestPrefixSupplyReachesTokenize:
     from a separate /tokenize call. If that second request omits the prefix, the engine
     generates from the spliced prompt while the record holds a plain re-render of the
     conversation, so the captured chain does not extend its parent. Training consumes the
-    record, so the two disagreeing is a training bug, not a reporting one -- and it is
+    record, so the two disagreeing is a training bug, not a reporting one, and it is
     invisible to any assertion made on the outbound chat body alone.
     """
 

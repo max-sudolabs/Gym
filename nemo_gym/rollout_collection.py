@@ -261,7 +261,7 @@ class RolloutCollectionConfig(SharedRolloutCollectionConfig):
 
 def _agent_participates_in_token_capture(global_config: Any, agent_name: str | None) -> bool:
     """Whether the producing agent opted into training token capture (its ``token_id_capture``
-    flag). Native agents leave it off -- they carry token ids inline and need no store rebuild -- so
+    flag). Native agents leave it off, since they carry token ids inline and need no store rebuild, so
     this scopes the rebuild (and its token-less warnings) to external-harness rollouts. Defaults to
     False when the agent or flag is absent."""
     if not agent_name:

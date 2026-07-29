@@ -57,7 +57,7 @@ def install_token_capture_routes(app: Any, store: TokenCaptureStore, read_token:
     The route serves a rollout's raw training tokens on the same app the harness
     calls to generate. That is acceptable inside a trusted cluster; it is not
     acceptable once the harness runs in a sandbox whose only egress is this
-    server, because it could read its own training data -- or another rollout's.
+    server, because it could read its own training data, or another rollout's.
     ``read_token`` requires a bearer token; when it is unset the route stays open
     and warns once, so existing deployments keep working and the gap is visible.
     """
