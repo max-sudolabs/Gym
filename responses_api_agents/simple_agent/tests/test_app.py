@@ -188,13 +188,19 @@ class TestApp:
                     "object": "response",
                     "output": [
                         {
+                            "id": "reasoning-1",
+                            "summary": [{"text": "look up the answer", "type": "summary_text"}],
+                            "status": "completed",
+                            "type": "reasoning",
+                        },
+                        {
                             "id": "fc-1",
                             "call_id": "call-1",
                             "name": "lookup",
                             "arguments": '{"q":"x"}',
                             "type": "function_call",
                             "status": "completed",
-                        }
+                        },
                     ],
                     "parallel_tool_calls": True,
                     "tool_choice": "auto",
@@ -265,7 +271,19 @@ class TestApp:
         turns = [record for record in bundle.records if isinstance(record, TrajectoryTurn)]
         tools = [record for record in bundle.records if isinstance(record, ToolCallObservation)]
         assert [(turn.task_id, turn.rollout_id) for turn in turns] == [("0", "4-1"), ("0", "4-1")]
+        assert [turn.turn_no for turn in turns] == [1, 2]
+        assert all(turn.timestamp > 0 for turn in turns)
         assert [turn.model_calls[0].response_id for turn in turns] == ["resp-tool", "resp-final"]
+        assert turns[0].model_dump(mode="json")["question"] == [
+            {"role": "user", "content": "question", "type": "message"}
+        ]
+        assert [item["type"] for item in turns[0].model_dump(mode="json")["answer"]] == [
+            "reasoning",
+            "function_call",
+        ]
+        assert turns[0].reasoning_content is not None
+        assert turns[0].reasoning_content[0]["summary"][0]["text"] == "look up the answer"
+        assert [turn.step_count for turn in turns] == [1, 1]
         assert turns[-1].resolved is False
         assert len(tools) == 1
         assert (tools[0].output, tools[0].status, tools[0].error_type) == ("bad input", "failed", "http_422")

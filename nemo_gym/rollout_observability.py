@@ -51,6 +51,7 @@ class TrajectoryResponseMetadata(ObservationModel):
     model: Optional[str] = None
     dialect: Optional[str] = None
     status_code: Optional[int] = None
+    response_status: Optional[str] = None
     finish_reason: Optional[str] = None
     error_category: Optional[str] = None
     cache_hit: Optional[bool] = None
@@ -60,6 +61,10 @@ class TrajectoryResponseMetadata(ObservationModel):
 
 class TrajectoryModelCall(ObservationModel):
     model_call_id: Optional[str] = None
+    invocation_id: Optional[str] = Field(
+        default=None,
+        description="Invocation that owns the linked turn; use with turn_no.",
+    )
     turn_no: Optional[int] = Field(default=None, ge=1)
     started_at: Optional[float] = None
     completed_at: Optional[float] = None
@@ -70,19 +75,25 @@ class TrajectoryModelCall(ObservationModel):
     response_metadata: TrajectoryResponseMetadata = Field(default_factory=TrajectoryResponseMetadata)
     token_stats: TrajectoryTokenStats = Field(default_factory=TrajectoryTokenStats)
 
+    @model_validator(mode="after")
+    def validate_turn_ref(self) -> "TrajectoryModelCall":
+        if (self.invocation_id is None) != (self.turn_no is None):
+            raise ValueError("invocation_id and turn_no must be set together")
+        return self
+
 
 class TrajectoryTurn(ObservationModel):
     kind: Literal["turn"] = "turn"
     invocation_id: str
     task_id: str
     rollout_id: str
-    turn_no: int = Field(ge=1)
+    turn_no: int = Field(ge=1, description="Turn number within this invocation.")
     timestamp: float
     question: Optional[Any] = None
     answer: Optional[Any] = None
     reasoning_content: Optional[Any] = None
     resolved: Optional[bool] = None
-    step_count: int = Field(ge=0)
+    step_count: int = Field(ge=0, description="Producer-reported cumulative step count within this invocation.")
     model_calls: list[ModelCallRef] = Field(default_factory=list)
 
 
@@ -252,7 +263,7 @@ class TrajectoryRecord(ObservationModel):
     tool_calls: list[ToolCallObservation] = Field(default_factory=list)
     conversation: list[NeMoGymResponseInputItem] = Field(default_factory=list)
     resolved: Optional[bool] = None
-    step_count: int = Field(ge=0)
+    step_count: int = Field(ge=0, description="Maximum observed cumulative step count or tool-attempt count.")
     gaps: list[ObservationGap] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -265,6 +276,11 @@ class TrajectoryRecord(ObservationModel):
             if key in keys:
                 raise ValueError("turn number must be unique within an invocation")
             keys.add(key)
+        for call in self.model_calls:
+            if call.turn_no is not None:
+                assert call.invocation_id is not None  # enforced by TrajectoryModelCall
+                if (call.invocation_id, call.turn_no) not in keys:
+                    raise ValueError("model-call turn reference must identify a trajectory turn")
         return self
 
 

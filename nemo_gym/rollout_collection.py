@@ -119,6 +119,18 @@ def _nonnegative_int(value: Any) -> Optional[int]:
     return value if type(value) is int and value >= 0 else None
 
 
+def _redact_input_image_blocks(value: Any) -> Any:
+    if isinstance(value, list):
+        return [
+            _redact_input_image_blocks(item)
+            for item in value
+            if not (isinstance(item, dict) and item.get("type") == "input_image")
+        ]
+    if isinstance(value, dict):
+        return {key: _redact_input_image_blocks(item) for key, item in value.items()}
+    return value
+
+
 def _build_trajectory_record(row: dict[str, Any], result: dict[str, Any]) -> TrajectoryRecord:
     task_id = next(
         (str(row[key]) for key in ("task_id", "problem_id", "instance_id") if row.get(key) is not None),
@@ -150,18 +162,21 @@ def _build_trajectory_record(row: dict[str, Any], result: dict[str, Any]) -> Tra
         except Exception as exc:
             gaps.append(ObservationGap(code="agent_observations_invalid", detail=type(exc).__name__))
 
-    turns.sort(key=lambda turn: (turn.turn_no, turn.timestamp, turn.invocation_id))
+    turn_counts = Counter((turn.invocation_id, turn.turn_no) for turn in turns)
+    duplicate_turns = {key for key, count in turn_counts.items() if count > 1}
+    turns.sort(key=lambda turn: (turn.timestamp, turn.invocation_id, turn.turn_no))
     valid_turns: list[TrajectoryTurn] = []
-    seen_turns: set[tuple[str, int]] = set()
+    reported_duplicates: set[tuple[str, int]] = set()
     for turn in turns:
         turn_key = (turn.invocation_id, turn.turn_no)
         if turn.task_id != task_id or turn.rollout_id != rollout_id:
             gaps.append(ObservationGap(code="turn_identity_mismatch", invocation_id=turn.invocation_id))
-        elif turn_key in seen_turns:
-            gaps.append(ObservationGap(code="turn_duplicate", invocation_id=turn.invocation_id))
+        elif turn_key in duplicate_turns:
+            if turn_key not in reported_duplicates:
+                gaps.append(ObservationGap(code="turn_duplicate", invocation_id=turn.invocation_id))
+                reported_duplicates.add(turn_key)
         else:
             valid_turns.append(turn)
-            seen_turns.add(turn_key)
     turns = valid_turns
 
     turn_by_call: dict[str, set[tuple[str, int]]] = {}
@@ -197,7 +212,7 @@ def _build_trajectory_record(row: dict[str, Any], result: dict[str, Any]) -> Tra
             turn_candidates.update(turn_by_call.get(model_call_id, set()))
         if response_key is not None:
             turn_candidates.update(turn_by_response.get(response_key, set()))
-        turn_no = next(iter(turn_candidates))[1] if len(turn_candidates) == 1 else None
+        turn_ref = next(iter(turn_candidates)) if len(turn_candidates) == 1 else None
         if len(turn_candidates) > 1:
             gaps.append(
                 ObservationGap(
@@ -207,10 +222,20 @@ def _build_trajectory_record(row: dict[str, Any], result: dict[str, Any]) -> Tra
             )
         status_code = raw_call.get("status_code")
         error_category = raw_call.get("error_category")
-        if error_category in {"incomplete", "stream_truncated", "capture_parse_error"}:
-            status: Literal["completed", "failed", "incomplete", "unknown"] = "incomplete"
-        elif error_category or (isinstance(status_code, int) and status_code >= 400):
+        response_status = raw_call.get("response_status")
+        if (error_category and error_category not in {"incomplete", "stream_truncated", "capture_parse_error"}) or (
+            isinstance(status_code, int) and status_code >= 400
+        ):
+            status: Literal["completed", "failed", "incomplete", "unknown"] = "failed"
+        elif response_status == "failed":
             status = "failed"
+        elif error_category in {"incomplete", "stream_truncated", "capture_parse_error"} or response_status in {
+            "cancelled",
+            "incomplete",
+            "in_progress",
+            "queued",
+        }:
+            status = "incomplete"
         elif status_code is None:
             status = "unknown"
         else:
@@ -223,6 +248,7 @@ def _build_trajectory_record(row: dict[str, Any], result: dict[str, Any]) -> Tra
                 "model",
                 "dialect",
                 "status_code",
+                "response_status",
                 "finish_reason",
                 "error_category",
                 "cache_hit",
@@ -234,7 +260,8 @@ def _build_trajectory_record(row: dict[str, Any], result: dict[str, Any]) -> Tra
         model_calls.append(
             TrajectoryModelCall(
                 model_call_id=model_call_id,
-                turn_no=turn_no,
+                invocation_id=turn_ref[0] if turn_ref is not None else None,
+                turn_no=turn_ref[1] if turn_ref is not None else None,
                 started_at=raw_call.get("started_at"),
                 completed_at=raw_call.get("completed_at"),
                 duration_ms=raw_call.get("latency_total_ms"),
@@ -270,7 +297,7 @@ def _build_trajectory_record(row: dict[str, Any], result: dict[str, Any]) -> Tra
         gaps.append(ObservationGap(code="conversation_unavailable"))
 
     resolved = result.get("resolved") if isinstance(result.get("resolved"), bool) else None
-    return TrajectoryRecord(
+    trajectory = TrajectoryRecord(
         task_id=task_id,
         rollout_id=rollout_id,
         attempt_no=attempt_no,
@@ -280,12 +307,24 @@ def _build_trajectory_record(row: dict[str, Any], result: dict[str, Any]) -> Tra
         tool_calls=tools,
         conversation=conversation,
         resolved=resolved,
-        step_count=turns[-1].step_count if turns else len(tools),
+        step_count=max([len(tools), *(turn.step_count for turn in turns)]),
         gaps=list({(gap.code, gap.invocation_id, gap.detail): gap for gap in gaps}.values()),
     )
+    if any(gap.code == "multimodal_history_redacted" for gap in trajectory.gaps):
+        return TrajectoryRecord.model_validate(_redact_input_image_blocks(trajectory.model_dump(mode="json")))
+    return trajectory
 
 
 def _attach_trajectory_record(row: dict[str, Any], result: dict[str, Any]) -> None:
+    raw_observations = result.get("ng_agent_observations")
+    raw_gaps = raw_observations.get("gaps") if isinstance(raw_observations, dict) else None
+    redact_input_images = isinstance(raw_gaps, list) and any(
+        isinstance(gap, dict) and gap.get("code") == "multimodal_history_redacted" for gap in raw_gaps
+    )
+    capture = result.get("ng_model_call_capture")
+    if redact_input_images and isinstance(capture, dict):
+        result["ng_model_call_capture"] = _redact_input_image_blocks(capture)
+
     try:
         result[NG_TRAJECTORY_KEY] = _build_trajectory_record(row, result).model_dump(mode="json")
     except Exception as exc:

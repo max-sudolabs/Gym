@@ -176,6 +176,7 @@ def test_build_model_call_record_from_exchange():
         "model",
         "dialect",
         "status_code",
+        "response_status",
         "finish_reason",
         "started_at",
         "completed_at",
@@ -227,6 +228,16 @@ def test_build_model_call_record_preserves_top_level_usage_aliases():
 )
 def test_build_model_call_record_normalizes_finish_reason(response, expected):
     assert build_model_call_record({"response": response}, call_index=0).finish_reason == expected
+
+
+def test_build_model_call_record_preserves_response_status():
+    record = build_model_call_record(
+        {"response": {"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}}},
+        call_index=0,
+    )
+
+    assert record.response_status == "incomplete"
+    assert record.finish_reason == "max_output_tokens"
 
 
 def test_build_model_call_record_tolerates_malformed_nested_shapes():

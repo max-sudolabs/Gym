@@ -113,6 +113,9 @@ response payloads; those remain in `CaptureStore`. Resume attempts use an `-a<n>
 data does not mix with an earlier attempt. Before dispatch, the collector clears any existing capture
 for that exact rollout-attempt id, including a kill-shaped attempt being redispatched.
 
+Aggregate token metrics sum values reported by individual calls. If a call omits a token field, that aggregate is partial;
+use the per-call value to distinguish unavailable evidence from a measured zero.
+
 The attachment is additive: it does not replace or rewrite the existing response, reward,
 `NeMoGymResponse`, token-id, or log-prob fields. Downstream consumers can choose whether to read it,
 and aggregate-metrics requests exclude it.
@@ -120,7 +123,8 @@ and aggregate-metrics requests exclude it.
 <Warning>
 The rollout attachment is not self-contained because it omits request and response payloads. Use `CaptureStore` for the
 full model-server record. Rollout collection includes these payloads when it builds
-[`ng_trajectory`](/about/concepts/trajectory-format). A missing token detail is not a measured zero.
+[`ng_trajectory`](/about/concepts/trajectory-format). Producers that report `multimodal_history_redacted` remove
+`input_image` blocks from the projected trajectory, not from `CaptureStore`. A missing token detail is not a measured zero.
 </Warning>
 
 ## Agent observations

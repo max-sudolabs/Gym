@@ -69,6 +69,11 @@ def test_observation_models_reject_unknown_fields() -> None:
         TrajectoryModelCall(response_metadata={"unexpected": "value"})
 
 
+def test_trajectory_model_call_requires_qualified_turn_reference() -> None:
+    with pytest.raises(ValidationError, match="invocation_id and turn_no"):
+        TrajectoryModelCall(turn_no=1)
+
+
 def test_trajectory_record_rejects_inconsistent_or_duplicate_turns() -> None:
     turn = TrajectoryTurn(
         invocation_id="root",
@@ -83,6 +88,16 @@ def test_trajectory_record_rejects_inconsistent_or_duplicate_turns() -> None:
     with pytest.raises(ValidationError, match="turn number"):
         TrajectoryRecord(
             task_id="task", rollout_id="0-0", attempt_no=1, created_at=1.0, step_count=0, turns=[turn, turn]
+        )
+    with pytest.raises(ValidationError, match="model-call turn reference"):
+        TrajectoryRecord(
+            task_id="task",
+            rollout_id="0-0",
+            attempt_no=1,
+            created_at=1.0,
+            step_count=0,
+            turns=[turn],
+            model_calls=[TrajectoryModelCall(invocation_id="child", turn_no=1)],
         )
 
 

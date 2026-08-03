@@ -12,6 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 from nemo_gym.config_types import ModelServerRef, ResourcesServerRef
@@ -21,6 +22,7 @@ from responses_api_agents.labbench2_vlm_agent.app import (
     LabbenchVLMAgent,
     LabbenchVLMAgentConfig,
     _effective_media_mode,
+    _strip_image_blocks,
 )
 from responses_api_agents.simple_agent.app import SimpleAgent, SimpleAgentRunRequest, SimpleAgentVerifyResponse
 
@@ -84,3 +86,50 @@ async def test_run_preserves_unset_model_during_media_embedding(monkeypatch) -> 
 
     forwarded_body = super_run.call_args.args[1]
     assert "model" not in forwarded_body.responses_create_params.model_fields_set
+
+
+def test_strip_images_removes_media_from_response_and_observations() -> None:
+    image = {"type": "input_image", "image_url": "data:image/png;base64,cGF5bG9hZA==", "detail": "auto"}
+    text = {"type": "input_text", "text": "question"}
+    message = {"role": "user", "content": [text, image]}
+    result = SimpleAgentVerifyResponse.model_validate(
+        {
+            "responses_create_params": {"input": [message]},
+            "response": {
+                "id": "response-1",
+                "created_at": 1,
+                "model": "model",
+                "object": "response",
+                "output": [],
+                "parallel_tool_calls": True,
+                "tool_choice": "auto",
+                "tools": [],
+            },
+            "reward": 1.0,
+            "ng_agent_observations": {
+                "source": "simple_agent",
+                "records": [
+                    {"kind": "agent_invocation", "invocation_id": "root", "conversation": [message]},
+                    {
+                        "kind": "turn",
+                        "invocation_id": "root",
+                        "task_id": "task",
+                        "rollout_id": "0-0",
+                        "turn_no": 1,
+                        "timestamp": 1.0,
+                        "question": [message],
+                        "step_count": 0,
+                    },
+                ],
+            },
+        }
+    )
+
+    stripped = _strip_image_blocks(result)
+    serialized = json.dumps(stripped.model_dump(mode="json"))
+
+    assert "input_image" not in serialized
+    assert "cGF5bG9hZA==" not in serialized
+    assert "question" in serialized
+    assert stripped.ng_agent_observations is not None
+    assert [gap.code for gap in stripped.ng_agent_observations.gaps] == ["multimodal_history_redacted"]

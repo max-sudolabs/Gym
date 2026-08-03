@@ -543,6 +543,7 @@ class ModelCallRecord(BaseModel):
     model: Optional[str] = None
     dialect: Optional[str] = None
     status_code: Optional[int] = None
+    response_status: Optional[str] = None
     finish_reason: Optional[str] = None
 
     # Wall-clock bounds around the downstream ASGI invocation, as UTC Unix timestamps. These are
@@ -617,6 +618,7 @@ def build_model_call_record(exchange: dict[str, Any], *, call_index: int) -> Mod
         model=model if isinstance(model, str) else None,
         dialect=exchange.get("dialect"),
         status_code=exchange.get("status_code"),
+        response_status=response.get("status") if isinstance(response.get("status"), str) else None,
         finish_reason=finish_reason,
         started_at=exchange.get("started_at"),
         completed_at=exchange.get("completed_at"),

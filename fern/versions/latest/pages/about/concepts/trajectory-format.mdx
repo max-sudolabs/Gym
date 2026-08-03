@@ -30,7 +30,8 @@ model_call_capture_dir: /data/model-calls
 ```
 
 Calls must use a `/ng-rollout/<rollout_id>` Gym Model Server prefix. Captured request and response payloads are included in
-the rollout trajectory as the model-server boundary exchange. Direct provider calls are outside this boundary.
+the rollout trajectory as the model-server boundary exchange. A producer can report `multimodal_history_redacted`; rollout
+collection then removes `input_image` blocks from the projected trajectory. Direct provider calls are outside this boundary.
 
 ## Token statistics
 
@@ -50,6 +51,8 @@ Unavailable captured details are `null` in `ng_trajectory`. Protocol adapters ca
 
 Instrumented agent integrations can emit semantic turns and tool attempts through `ng_agent_observations`. Tool attempts retain independent
 timing, so overlapping calls can be represented without inferring duration from list order.
+Turn numbers and cumulative step counts are scoped to an invocation. Model-call turn links include both the invocation ID
+and turn number.
 
 Simple Agent is the reference resource-server integration. Other producers are listed in the
 [trajectory capability matrix](/reference/trajectory-capabilities).

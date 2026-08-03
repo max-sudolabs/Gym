@@ -7,8 +7,7 @@ position: 5
 # Trajectory capability matrix
 
 <Warning>
-A schema can represent evidence that a producer does not emit. Treat a capability as supported only when the producer
-integration supplies it and its tests cover the relevant boundary.
+A schema can represent evidence that a producer does not emit. The matrix reports producer coverage, not schema capacity.
 </Warning>
 
 ## Acceptance criteria
@@ -19,9 +18,9 @@ integration supplies it and its tests cover the relevant boundary.
 | C2 — complete token statistics | Shared capture and Responses conversion preserve provider-reported prompt, completion, reasoning, total, and cached counts | Inference Provider, Anthropic conversion, and custom adapters can still expose partial usage or API defaults |
 | C3 — standard per-turn fields | Turns contain task and rollout identity, turn number, timestamp, question, answer, reasoning content, resolution, and cumulative step count | Turn fidelity depends on exact producer ownership and history evidence |
 | C4 — reconstruct model-visible history | Captured model-server exchanges and the root invocation conversation are copied into `ng_trajectory` | Provider rendering, direct-provider calls, child invocations, stateful context, and incomplete compaction boundaries remain gaps |
-| C5 — complete tool observations | Tool attempts contain output, status, timestamps, duration, and errors | Most agents do not yet emit shared tool observations |
+| C5 — complete tool observations | Simple Agent and Claude Code tool attempts contain output, status, timestamps, duration, and errors | Most agents do not yet emit shared tool observations |
 | C6 — parallel tool timing | Independent tool-attempt intervals represent overlap | Producer coverage is limited; Simple Agent executes tools sequentially |
-| C7 — resource and sandbox integrations | The projection consumes the shared observation contract; Simple Agent is the resource-server reference | CLI, remote, imported, and sandbox-backed producers remain partial |
+| C7 — resource and sandbox integrations | Simple Agent is the resource-server reference; Claude Code is the custom/sandbox reference | Other CLI, remote, imported, and sandbox-backed producers remain partial |
 
 Rollout collection adds `ng_trajectory` when model-call capture or agent observations are present. Model-call evidence
 requires calls to use a rollout-prefixed Gym Model Server with capture enabled.
@@ -30,58 +29,64 @@ requires calls to use a rollout-prefixed Gym Model Server with capture enabled.
 
 Open rows describe intended evidence, not current support.
 
-| PR | Producers | Intended evidence | State |
+| PR | Producers | Criterion coverage | State |
 |---|---|---|---|
-| [#2114](https://github.com/NVIDIA-NeMo/Gym/pull/2114) | Shared contract | Invocation, tool, compaction, sandbox, and model-call correlation records | Merged |
-| [#2153](https://github.com/NVIDIA-NeMo/Gym/pull/2153) | Claude Code | Conversation ownership, invocation tree, tool intervals, and compaction | Merged |
-| [#2115](https://github.com/NVIDIA-NeMo/Gym/pull/2115) | OpenClaw, PinchBench | Conversation/tree/tool intervals and partial sandbox outcome | Open |
+| [#2114](https://github.com/NVIDIA-NeMo/Gym/pull/2114) | Shared contract | Observation and model-call correlation primitives | Merged |
+| [#2153](https://github.com/NVIDIA-NeMo/Gym/pull/2153) | Claude Code | C1, C2, C4, C6, C7; the current trajectory contract adds observation-level output to its timing/status evidence | Merged |
+| [#2115](https://github.com/NVIDIA-NeMo/Gym/pull/2115) | OpenClaw, PinchBench | C1, C2, C4, C6, C7; partial C5 (timing/status only), with output required on rebase | Open |
 | [#2116](https://github.com/NVIDIA-NeMo/Gym/pull/2116) | Claude Code | Earlier Claude proposal | Superseded by #2153; not merged to `main` |
-| [#2117](https://github.com/NVIDIA-NeMo/Gym/pull/2117) | Hermes | Child invocations, model ownership, tool intervals, and compaction | Open |
-| [#2118](https://github.com/NVIDIA-NeMo/Gym/pull/2118) | Pi | Response ownership, overlapping tool intervals, and compaction | Open |
-| [#2119](https://github.com/NVIDIA-NeMo/Gym/pull/2119) | OpenCode | Sessions, child relations, history, tool intervals, and compaction | Open |
-| [#2120](https://github.com/NVIDIA-NeMo/Gym/pull/2120) | SWE Agents (OpenHands) | Session ownership and partial sandbox outcome | Open |
+| [#2117](https://github.com/NVIDIA-NeMo/Gym/pull/2117) | Hermes | C6, C7; partial C5 (timing/status only), with output required on rebase | Open |
+| [#2118](https://github.com/NVIDIA-NeMo/Gym/pull/2118) | Pi | C1, C2, C4, C6, C7; partial C5 (timing/status only), with output required on rebase | Open |
+| [#2119](https://github.com/NVIDIA-NeMo/Gym/pull/2119) | OpenCode | C1, C2, C4, C6, C7; partial C5 (timing/status only), with output required on rebase | Open |
+| [#2120](https://github.com/NVIDIA-NeMo/Gym/pull/2120) | SWE Agents | C1 and C2 for OpenCode; C4 and C7 for retained OpenCode/OpenHands artifacts; OpenHands model-call correlation remains a gap | Open |
 | #2121 | — | — | No public implementation |
-| [#2122](https://github.com/NVIDIA-NeMo/Gym/pull/2122) | Stirrup/GDPVal, Tau2 | Auxiliary model-call correlation | Open |
+| [#2122](https://github.com/NVIDIA-NeMo/Gym/pull/2122) | Stirrup/GDPVal | C1, C2, and C4 GDPVal judge-call correlation; Tau2 policy and user-simulator correlation already exists | Open |
 
 ## Agent coverage
 
-“Model capture” means conditional capture at a rollout-prefixed Gym Model Server. It does not include tool execution or
-semantic turns.
+- `V`: the criterion is implemented for this producer when its documented observability configuration is enabled.
+- `O`: support is partial, path-dependent, or supplied by the linked open pull request; it is not a full pass.
+- `X`: the producer does not supply standardized evidence for the criterion.
 
-| Agent | Shared evidence | Follow-up | Main gap |
-|---|---|---|---|
-| `anyswe_agent` | None | — | Inner-agent calls, exact context, tools, and sandbox lifecycle |
-| `anyterminal_agent` | None | — | Sandbox transcript, tool attempts, and outcome |
-| `aviary_agent` | Model capture | — | Resource-tool timing, output, and turns |
-| `browsecomp_agent` | Model capture | — | Tool timing and exact pre-compaction history |
-| `claude_code_agent` | Invocation tree, conversation, model ownership, tool intervals, compaction | #2153 merged; #2116 superseded | Sandbox usage and exact compaction contexts |
-| `codex_agent` | None | — | CLI model usage, tool attempts, and sandbox evidence |
-| `critpt_agent` | Model capture | — | Standard identity and turns |
-| `cvdp_agent` | Model capture | — | Resource-tool timing and observations |
-| `finance_agent` | Model capture; usage-detail aggregation | — | Resource-tool timing and observations |
-| `gymnasium_agent` | Model capture; usage-detail aggregation | — | Environment-step timing and standard resolution turns |
-| `harbor_agent` | None | — | ATIF timing projection and shared turn/tool records |
-| `hermes_agent` | None | #2117 | Invocation, tool, and compaction producer |
-| `kilocode_agent` | None | — | CLI history, usage, tools, and compaction |
-| `labbench2_vlm_agent` | Model capture | — | Multimodal turn and resource-tool observations |
-| `langgraph_agent` | None | — | Graph node, model, tool, and turn callbacks |
-| `mini_swe_agent` | None | — | Sandbox transcript, tools, outcome, and usage |
-| `mini_swe_agent_2` | None | — | Sandbox transcript, tools, outcome, and usage |
-| `non_executing_simple_agent` | Model capture | — | Standard identity and turns; tools are not applicable |
-| `openclaw_agent` | None | #2115 | Conversation, invocation, tool, and compaction producer |
-| `opencode_agent` | None | #2119 | Exact call ownership, tools, usage, and compaction |
-| `pi_agent` | None | #2118 | Invocation, tool, and compaction producer |
-| `pinchbench` | None | #2115 | Provider-neutral sandbox and tool evidence |
-| `proof_refinement_agent` | Model capture | — | Standard identity and turns; tools can be not applicable |
-| `remote_agent` | Remote response usage-detail aggregation | — | Negotiation for model and tool evidence produced outside Gym boundaries |
-| `scicode_agent` | Model capture | — | Resource-tool observations and standard turns |
-| `simple_agent` | Model ownership, conversation, and tool output/status/timing | Included with trajectory schema | Sequential tools; no sandbox usage |
-| `speed_bench_agent` | Model capture | — | Standard turns and identity |
-| `stirrup_agent` | Policy-call correlation | #2122; [#2134](https://github.com/NVIDIA-NeMo/Gym/pull/2134) merged in part | Judge calls, tools, and sandbox evidence |
-| `swe_agents` | Agent-specific session metrics only | #2120 | Shared model ownership, tool timing, and sandbox evidence |
-| `tau2` | Agent/user-simulator call correlation | #2122; [#2051](https://github.com/NVIDIA-NeMo/Gym/pull/2051) merged in part | Canonical steps, usage, tools, and outcome |
-| `tool_simulation_agent` | Model capture | — | Shared simulator-tool timing and output |
-| `toolsandbox_agent` | None | — | ToolSandbox timing, output, errors, overlap, and session identity |
-| `verifiers_agent` | Model capture | — | Local per-turn counters are not shared trajectory turns |
+| Agent | C1 | C2 | C3 | C4 | C5 | C6 | C7 | Status / follow-up |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|---|
+| `anyswe_agent` | X | X | X | X | X | X | X | — |
+| `anyterminal_agent` | V | V | X | V | X | X | X | — |
+| `aviary_agent` | V | V | X | V | X | X | X | — |
+| `browsecomp_agent` | V | V | X | V | X | X | X | — |
+| `claude_code_agent` | V | V | X | V | V | V | V | #2153 merged |
+| `codex_agent` | V | V | X | V | X | X | X | — |
+| `critpt_agent` | V | V | X | V | X | X | X | — |
+| `cvdp_agent` | O | O | X | O | X | X | X | Simple path only |
+| `finance_agent` | X | O | X | X | X | X | X | Aggregate response usage only; no per-call trajectory stats |
+| `gymnasium_agent` | V | V | X | V | X | X | X | — |
+| `harbor_agent` | X | X | X | X | X | X | X | — |
+| `hermes_agent` | V | V | X | V | O | O | O | [#2117](https://github.com/NVIDIA-NeMo/Gym/pull/2117) |
+| `kilocode_agent` | X | X | X | X | X | X | X | — |
+| `labbench2_vlm_agent` | V | V | V | O | V | X | V | Multimodal history is redacted by default |
+| `langgraph_agent` | X | X | X | X | X | X | X | — |
+| `mini_swe_agent` | X | X | X | X | X | X | X | — |
+| `mini_swe_agent_2` | V | V | X | V | X | X | X | — |
+| `non_executing_simple_agent` | V | V | X | V | X | X | X | — |
+| `openclaw_agent` | O | O | X | O | O | O | O | [#2115](https://github.com/NVIDIA-NeMo/Gym/pull/2115) |
+| `opencode_agent` | O | O | X | O | O | O | O | [#2119](https://github.com/NVIDIA-NeMo/Gym/pull/2119) |
+| `pi_agent` | O | O | X | O | O | O | O | [#2118](https://github.com/NVIDIA-NeMo/Gym/pull/2118) |
+| `pinchbench` | O | O | X | O | O | O | O | [#2115](https://github.com/NVIDIA-NeMo/Gym/pull/2115) |
+| `proof_refinement_agent` | V | V | X | V | X | X | X | — |
+| `remote_agent` | X | O | X | X | X | X | X | Aggregate response usage only; no per-call trajectory stats |
+| `scicode_agent` | X | X | X | X | X | X | X | — |
+| `simple_agent` | V | V | V | V | V | X | V | — |
+| `speed_bench_agent` | V | V | X | V | X | X | X | — |
+| `stirrup_agent` | O | O | X | O | X | X | X | Policy path is current; [#2122](https://github.com/NVIDIA-NeMo/Gym/pull/2122) adds GDPVal judge calls |
+| `swe_agents` | O | O | X | O | X | X | O | [#2120](https://github.com/NVIDIA-NeMo/Gym/pull/2120); model-call correlation is OpenCode-only |
+| `tau2` | V | V | X | V | X | X | X | Policy and user-simulator calls are current |
+| `tool_simulation_agent` | V | V | X | V | X | X | X | — |
+| `toolsandbox_agent` | V | V | X | V | X | X | X | — |
+| `verifiers_agent` | X | X | X | X | X | X | X | — |
+
+Capture-backed C1, C2, and C4 require `observability_enabled` and rollout-prefixed Gym Model Server requests. Direct
+provider calls are not captured. C7 requires an agent-side shared observation producer; model HTTP capture alone does not
+satisfy it. None of #2115–#2120 emits canonical `TrajectoryTurn` records, so those pull requests do not satisfy C3.
+Open C5 entries must populate `ToolCallObservation.output` when rebased onto the current contract.
 
 Trajectory consumers must distinguish unavailable values from measured zeros.
