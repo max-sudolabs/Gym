@@ -69,10 +69,7 @@ async def test_concurrent_calls_keep_independent_intervals_and_completion_order(
     assert (slow_result[0], fast_result[0]) == ("slow", "fast")
     assert slow_result[1].tool_call_id == "slow"
     assert fast_result[1].tool_call_id == "fast"
-    slow_result[1].output = slow_result[0]
-    fast_result[1].output = fast_result[0]
     by_id = {record.tool_call_id: record for record in recorder.records}
-    assert {call_id: record.output for call_id, record in by_id.items()} == {"slow": "slow", "fast": "fast"}
     assert by_id["slow"].started_at <= by_id["fast"].completed_at
     assert by_id["fast"].started_at <= by_id["slow"].completed_at
     assert [record.tool_call_id for record in recorder.records] == ["fast", "slow"]

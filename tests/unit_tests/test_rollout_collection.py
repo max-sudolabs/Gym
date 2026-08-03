@@ -202,8 +202,23 @@ class TestRolloutCollection:
         assert trajectory.turns[-1].resolved is True and trajectory.step_count == 2
         assert trajectory.tool_calls[0].duration_ms == 200.0
 
-    @pytest.mark.parametrize("response_status", ["cancelled", "incomplete", "in_progress", "queued"])
-    def test_trajectory_uses_response_status_for_incomplete_calls(self, response_status: str) -> None:
+    @pytest.mark.parametrize(
+        ("status_code", "error_category", "response_status", "expected_status"),
+        [
+            (200, None, "cancelled", "incomplete"),
+            (200, None, "incomplete", "incomplete"),
+            (200, None, "in_progress", "incomplete"),
+            (200, None, "queued", "incomplete"),
+            (500, "server_error", "incomplete", "failed"),
+        ],
+    )
+    def test_trajectory_normalizes_response_status_without_masking_transport_failure(
+        self,
+        status_code: int,
+        error_category: str | None,
+        response_status: str,
+        expected_status: str,
+    ) -> None:
         trajectory = _build_trajectory_record(
             {TASK_INDEX_KEY_NAME: 2, ROLLOUT_INDEX_KEY_NAME: 3},
             {
@@ -211,7 +226,8 @@ class TestRolloutCollection:
                     "calls": [
                         {
                             "model_call_id": "model-1",
-                            "status_code": 200,
+                            "status_code": status_code,
+                            "error_category": error_category,
                             "response_status": response_status,
                             "finish_reason": "max_output_tokens",
                         }
@@ -221,27 +237,8 @@ class TestRolloutCollection:
         )
 
         [model_call] = trajectory.model_calls
-        assert model_call.status == "incomplete"
+        assert model_call.status == expected_status
         assert model_call.response_metadata.response_status == response_status
-
-    def test_trajectory_transport_failure_precedes_response_status(self) -> None:
-        trajectory = _build_trajectory_record(
-            {TASK_INDEX_KEY_NAME: 2, ROLLOUT_INDEX_KEY_NAME: 3},
-            {
-                "ng_model_call_capture": {
-                    "calls": [
-                        {
-                            "model_call_id": "model-1",
-                            "status_code": 500,
-                            "error_category": "server_error",
-                            "response_status": "incomplete",
-                        }
-                    ]
-                }
-            },
-        )
-
-        assert trajectory.model_calls[0].status == "failed"
 
     def test_trajectory_projection_failure_preserves_rollout(self) -> None:
         row = {TASK_INDEX_KEY_NAME: 2, ROLLOUT_INDEX_KEY_NAME: 3}
@@ -268,7 +265,10 @@ class TestRolloutCollection:
         _attach_trajectory_record(row, malformed_result)
         assert malformed_result["ng_model_call_capture"]["gaps"][-1]["code"] == "trajectory_projection_failed"
 
-    def test_trajectory_redacts_captured_images_when_requested_by_producer(self) -> None:
+    @pytest.mark.parametrize(("latency_total_ms", "trajectory_attached"), [(None, True), (-1, False)])
+    def test_trajectory_redacts_captured_images_even_when_projection_fails(
+        self, latency_total_ms: float | None, trajectory_attached: bool
+    ) -> None:
         row = {TASK_INDEX_KEY_NAME: 2, ROLLOUT_INDEX_KEY_NAME: 3}
         image = {
             "type": "input_image",
@@ -280,6 +280,7 @@ class TestRolloutCollection:
                 "calls": [
                     {
                         "model_call_id": "model-1",
+                        "latency_total_ms": latency_total_ms,
                         "request": {"input": [{"role": "user", "content": [image]}]},
                         "response": {},
                     }
@@ -297,45 +298,9 @@ class TestRolloutCollection:
 
         assert "input_image" not in serialized
         assert "cGF5bG9hZA==" not in serialized
-        assert result["ng_trajectory"]["model_calls"][0]["request"] == {"input": [{"role": "user", "content": []}]}
-
-    def test_trajectory_redacts_captured_images_when_projection_fails(self) -> None:
-        row = {TASK_INDEX_KEY_NAME: 2, ROLLOUT_INDEX_KEY_NAME: 3}
-        result = {
-            "ng_model_call_capture": {
-                "calls": [
-                    {
-                        "model_call_id": "model-1",
-                        "latency_total_ms": -1,
-                        "request": {
-                            "input": [
-                                {
-                                    "role": "user",
-                                    "content": [
-                                        {
-                                            "type": "input_image",
-                                            "image_url": "data:image/png;base64,cGF5bG9hZA==",
-                                        }
-                                    ],
-                                }
-                            ]
-                        },
-                    }
-                ]
-            },
-            "ng_agent_observations": {
-                "source": "labbench2_vlm_agent",
-                "records": [],
-                "gaps": [{"code": "multimodal_history_redacted"}],
-            },
-        }
-
-        _attach_trajectory_record(row, result)
-        serialized = json.dumps(result)
-
-        assert "ng_trajectory" not in result
-        assert "input_image" not in serialized
-        assert "cGF5bG9hZA==" not in serialized
+        assert ("ng_trajectory" in result) is trajectory_attached
+        if trajectory_attached:
+            assert result["ng_trajectory"]["model_calls"][0]["request"] == {"input": [{"role": "user", "content": []}]}
 
     def test_trajectory_does_not_guess_between_multiple_roots(self) -> None:
         row = {TASK_INDEX_KEY_NAME: 2, ROLLOUT_INDEX_KEY_NAME: 3}
@@ -368,10 +333,16 @@ class TestRolloutCollection:
         assert trajectory.turns == []
         assert {"root_invocation_ambiguous", "turn_identity_mismatch"} <= {gap.code for gap in trajectory.gaps}
 
-    def test_trajectory_does_not_guess_duplicate_turn_ownership(self) -> None:
+    def test_trajectory_qualifies_turn_ownership_and_does_not_guess_ambiguous_calls(self) -> None:
         row = {TASK_INDEX_KEY_NAME: 2, ROLLOUT_INDEX_KEY_NAME: 3}
         result = {
-            "ng_model_call_capture": {"calls": [{"model_call_id": "shared"}]},
+            "ng_model_call_capture": {
+                "calls": [
+                    {"model_call_id": "root-call"},
+                    {"model_call_id": "child-call"},
+                    {"model_call_id": "shared"},
+                ]
+            },
             "ng_agent_observations": {
                 "source": "test",
                 "records": [
@@ -380,20 +351,27 @@ class TestRolloutCollection:
                         "invocation_id": invocation_id,
                         "task_id": "2",
                         "rollout_id": "2-3",
-                        "turn_no": turn_no,
-                        "timestamp": float(turn_no),
-                        "step_count": turn_no,
-                        "model_calls": [{"model_call_id": "shared"}],
+                        "turn_no": 1,
+                        "timestamp": timestamp,
+                        "step_count": 1,
+                        "model_calls": [{"model_call_id": model_call_id}, {"model_call_id": "shared"}],
                     }
-                    for invocation_id, turn_no in (("root", 1), ("child", 2))
+                    for invocation_id, model_call_id, timestamp in (
+                        ("child", "child-call", 2.0),
+                        ("root", "root-call", 1.0),
+                    )
                 ],
             },
         }
 
         trajectory = _build_trajectory_record(row, result)
 
-        assert trajectory.model_calls[0].turn_no is None
-        assert trajectory.model_calls[0].invocation_id is None
+        assert [(turn.invocation_id, turn.turn_no) for turn in trajectory.turns] == [("root", 1), ("child", 1)]
+        assert [(call.invocation_id, call.turn_no) for call in trajectory.model_calls] == [
+            ("root", 1),
+            ("child", 1),
+            (None, None),
+        ]
         assert "model_call_turn_ambiguous" in {gap.code for gap in trajectory.gaps}
 
     def test_trajectory_drops_all_conflicting_duplicate_turns(self) -> None:
@@ -421,39 +399,6 @@ class TestRolloutCollection:
 
         assert trajectory.turns == []
         assert [gap.code for gap in trajectory.gaps].count("turn_duplicate") == 1
-
-    def test_model_call_turn_reference_is_qualified_by_invocation(self) -> None:
-        row = {TASK_INDEX_KEY_NAME: 2, ROLLOUT_INDEX_KEY_NAME: 3}
-        result = {
-            "ng_model_call_capture": {"calls": [{"model_call_id": "root-call"}, {"model_call_id": "child-call"}]},
-            "ng_agent_observations": {
-                "source": "test",
-                "records": [
-                    {
-                        "kind": "turn",
-                        "invocation_id": invocation_id,
-                        "task_id": "2",
-                        "rollout_id": "2-3",
-                        "turn_no": 1,
-                        "timestamp": timestamp,
-                        "step_count": 1,
-                        "model_calls": [{"model_call_id": model_call_id}],
-                    }
-                    for invocation_id, model_call_id, timestamp in (
-                        ("child", "child-call", 2.0),
-                        ("root", "root-call", 1.0),
-                    )
-                ],
-            },
-        }
-
-        trajectory = _build_trajectory_record(row, result)
-
-        assert [(turn.invocation_id, turn.turn_no) for turn in trajectory.turns] == [("root", 1), ("child", 1)]
-        assert [(call.invocation_id, call.turn_no) for call in trajectory.model_calls] == [
-            ("root", 1),
-            ("child", 1),
-        ]
 
     @pytest.mark.parametrize("request_debug_enabled", [True, False])
     async def test_run_examples_logs_failed_run_when_request_debug_enabled(

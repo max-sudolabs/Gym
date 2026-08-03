@@ -504,7 +504,43 @@ def test_chat_messages_to_responses_items_unrecognized_role_raises(converter: Re
 # ===========================================================================
 
 
-def test_chat_completion_to_response_sanity(converter: ResponsesConverter):
+@pytest.mark.parametrize(
+    ("usage", "cached_tokens", "reasoning_tokens"),
+    [
+        (CompletionUsage(prompt_tokens=1, completion_tokens=2, total_tokens=3), 0, 0),
+        (
+            CompletionUsage(
+                prompt_tokens=11,
+                completion_tokens=5,
+                total_tokens=19,
+                prompt_tokens_details=PromptTokensDetails(cached_tokens=7),
+                completion_tokens_details=CompletionTokensDetails(reasoning_tokens=3),
+            ),
+            7,
+            3,
+        ),
+        (
+            CompletionUsage.model_validate(
+                {
+                    "prompt_tokens": 11,
+                    "completion_tokens": 5,
+                    "total_tokens": 19,
+                    "cached_input_tokens": 7,
+                    "reasoning_output_tokens": 3,
+                }
+            ),
+            7,
+            3,
+        ),
+    ],
+    ids=["without-details", "nested-details", "top-level-aliases"],
+)
+def test_chat_completion_to_response_sanity(
+    converter: ResponsesConverter,
+    usage: CompletionUsage,
+    cached_tokens: int,
+    reasoning_tokens: int,
+):
     actual_response = converter.chat_completion_to_response(
         responses_create_params=NeMoGymResponseCreateParamsNonStreaming(
             model="",
@@ -531,11 +567,7 @@ def test_chat_completion_to_response_sanity(converter: ResponsesConverter):
                     ),
                 )
             ],
-            usage=CompletionUsage(
-                prompt_tokens=1,
-                completion_tokens=2,
-                total_tokens=3,
-            ),
+            usage=usage,
         ),
     )
 
@@ -555,66 +587,17 @@ def test_chat_completion_to_response_sanity(converter: ResponsesConverter):
         ],
         parallel_tool_calls=True,
         usage=NeMoGymResponseUsage(
-            input_tokens=1,
-            input_tokens_details=NeMoGymResponseInputTokensDetails(cached_tokens=0),
-            output_tokens=2,
-            output_tokens_details=NeMoGymResponseOutputTokensDetails(reasoning_tokens=0),
-            total_tokens=3,
+            input_tokens=usage.prompt_tokens,
+            input_tokens_details=NeMoGymResponseInputTokensDetails(cached_tokens=cached_tokens),
+            output_tokens=usage.completion_tokens,
+            output_tokens_details=NeMoGymResponseOutputTokensDetails(reasoning_tokens=reasoning_tokens),
+            total_tokens=usage.total_tokens,
         ),
         tool_choice="auto",
         tools=[],
     )
 
     assert expected_response == actual_response
-
-
-@pytest.mark.parametrize(
-    "usage",
-    [
-        CompletionUsage(
-            prompt_tokens=11,
-            completion_tokens=5,
-            total_tokens=19,
-            prompt_tokens_details=PromptTokensDetails(cached_tokens=7),
-            completion_tokens_details=CompletionTokensDetails(reasoning_tokens=3),
-        ),
-        CompletionUsage.model_validate(
-            {
-                "prompt_tokens": 11,
-                "completion_tokens": 5,
-                "total_tokens": 19,
-                "cached_input_tokens": 7,
-                "reasoning_output_tokens": 3,
-            }
-        ),
-    ],
-    ids=["nested-details", "top-level-aliases"],
-)
-def test_chat_completion_to_response_preserves_provider_usage_details(
-    converter: ResponsesConverter, usage: CompletionUsage
-):
-    response = converter.chat_completion_to_response(
-        responses_create_params=NeMoGymResponseCreateParamsNonStreaming(model="m", input="hello"),
-        chat_completion=NeMoGymChatCompletion(
-            id="chat",
-            created=0,
-            model="m",
-            object="chat.completion",
-            choices=[
-                NeMoGymChoice(
-                    index=0,
-                    finish_reason="stop",
-                    message=NeMoGymChatCompletionMessage(role="assistant", content="done"),
-                )
-            ],
-            usage=usage,
-        ),
-    )
-
-    assert response.usage is not None
-    assert response.usage.total_tokens == 19
-    assert response.usage.input_tokens_details.cached_tokens == 7
-    assert response.usage.output_tokens_details.reasoning_tokens == 3
 
 
 # ===========================================================================
