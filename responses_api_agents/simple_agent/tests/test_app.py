@@ -26,6 +26,7 @@ from nemo_gym.openai_utils import (
     NeMoGymResponseReasoningItem,
     NeMoGymSummary,
 )
+from nemo_gym.rollout_observability import AgentObservationBundle, ToolCallObservation, TrajectoryTurn
 from nemo_gym.server_utils import ServerClient
 from responses_api_agents.simple_agent.app import (
     ModelServerRef,
@@ -163,6 +164,115 @@ class TestApp:
             "safety_identifier": None,
         }
         assert expected_responses_dict == actual_responses_dict
+
+    def test_run_emits_standard_turns_and_tool_observation(self) -> None:
+        config = SimpleAgentConfig(
+            host="0.0.0.0",
+            port=8080,
+            entrypoint="",
+            name="simple",
+            model_server=ModelServerRef(type="responses_api_models", name="model"),
+            resources_server=ResourcesServerRef(type="resources_servers", name="resources"),
+        )
+        server_client = MagicMock(spec=ServerClient)
+        server_client.global_config_dict = {"observability_enabled": True}
+        server = SimpleAgent(config=config, server_client=server_client)
+        client = TestClient(server.setup_webserver())
+
+        model_payloads = iter(
+            [
+                {
+                    "id": "resp-tool",
+                    "created_at": 1.0,
+                    "model": "model",
+                    "object": "response",
+                    "output": [
+                        {
+                            "id": "fc-1",
+                            "call_id": "call-1",
+                            "name": "lookup",
+                            "arguments": '{"q":"x"}',
+                            "type": "function_call",
+                            "status": "completed",
+                        }
+                    ],
+                    "parallel_tool_calls": True,
+                    "tool_choice": "auto",
+                    "tools": [],
+                },
+                {
+                    "id": "resp-final",
+                    "created_at": 2.0,
+                    "model": "model",
+                    "object": "response",
+                    "output": [
+                        {
+                            "id": "msg-1",
+                            "content": [{"annotations": [], "text": "done", "type": "output_text"}],
+                            "role": "assistant",
+                            "status": "completed",
+                            "type": "message",
+                        }
+                    ],
+                    "parallel_tool_calls": True,
+                    "tool_choice": "auto",
+                    "tools": [],
+                },
+            ]
+        )
+        verify_cookies = None
+
+        def mock_response(payload, *, cookies, status=200, content=None):
+            response = MagicMock()
+            response.ok = status < 400
+            response.status = status
+            response.cookies = cookies
+            response.read = AsyncMock(return_value=json.dumps(payload))
+            response.content.read = AsyncMock(return_value=(content or "").encode())
+            return response
+
+        async def post(*, server_name, url_path, **kwargs):
+            nonlocal verify_cookies
+            if url_path == "/seed_session":
+                return mock_response({}, cookies={"seed": "1"})
+            if url_path.endswith("/v1/responses"):
+                payload = next(model_payloads)
+                cookie = "m1" if payload["id"] == "resp-tool" else "m2"
+                return mock_response(payload, cookies={"model": cookie})
+            if url_path == "/lookup":
+                return mock_response({}, cookies={"tool": "2"}, status=422, content="bad input")
+            assert url_path == "/verify"
+            verify_cookies = kwargs["cookies"]
+            verify_request = kwargs["json"]
+            return mock_response(
+                verify_request | {"reward": 0.0, "resolved": False},
+                cookies={},
+            )
+
+        server_client.post = AsyncMock(side_effect=post)
+        response = client.post(
+            "/run",
+            json={
+                "responses_create_params": {"input": [{"role": "user", "content": "question"}]},
+                "instance_id": 0,
+                "_ng_task_index": 4,
+                "_ng_rollout_index": 1,
+            },
+        )
+
+        assert response.status_code == 200
+        bundle = AgentObservationBundle.model_validate(response.json()["ng_agent_observations"])
+        turns = [record for record in bundle.records if isinstance(record, TrajectoryTurn)]
+        tools = [record for record in bundle.records if isinstance(record, ToolCallObservation)]
+        assert [(turn.task_id, turn.rollout_id) for turn in turns] == [("0", "4-1"), ("0", "4-1")]
+        assert [turn.model_calls[0].response_id for turn in turns] == ["resp-tool", "resp-final"]
+        assert turns[-1].resolved is False
+        assert len(tools) == 1
+        assert (tools[0].output, tools[0].status, tools[0].error_type) == ("bad input", "failed", "http_422")
+        assert (
+            tools[0].started_at is not None and tools[0].completed_at is not None and tools[0].duration_ms is not None
+        )
+        assert verify_cookies == {"tool": "2", "model": "m2"}
 
     async def test_responses_continues_on_malformed_tool_call_arguments(self, monkeypatch: MonkeyPatch) -> None:
         """Malformed JSON in a tool-call's arguments must not crash the rollout.

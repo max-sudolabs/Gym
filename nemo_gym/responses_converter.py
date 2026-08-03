@@ -67,6 +67,25 @@ def _message_content_to_text(content: Any) -> str:
     return "".join(part.get("text", "") for part in content or [] if isinstance(part, dict))
 
 
+def _optional_token_count(value: Any) -> Optional[int]:
+    """Return a provider-reported token count without coercing missing/invalid values to zero."""
+    return value if type(value) is int and value >= 0 else None
+
+
+def _usage_detail(usage: Any, detail_group: str, *names: str) -> Optional[int]:
+    """Read the first valid token detail from a nested usage group or provider extension."""
+    details = getattr(usage, detail_group, None)
+    for source in (details, usage):
+        if source is None:
+            continue
+        for name in names:
+            value = source.get(name) if isinstance(source, dict) else getattr(source, name, None)
+            value = _optional_token_count(value)
+            if value is not None:
+                return value
+    return None
+
+
 class ResponsesConverterState(BaseModel):
     return_token_id_information: bool
 
@@ -489,12 +508,30 @@ class ResponsesConverter(BaseModel):
 
         usage = None
         if chat_completion.usage:
+            cached_tokens = _usage_detail(
+                chat_completion.usage,
+                "prompt_tokens_details",
+                "cached_tokens",
+                "cached_input_tokens",
+                "cache_read_input_tokens",
+            )
+            reasoning_tokens = _usage_detail(
+                chat_completion.usage,
+                "completion_tokens_details",
+                "reasoning_tokens",
+                "reasoning_output_tokens",
+            )
             usage = NeMoGymResponseUsage(
                 input_tokens=chat_completion.usage.prompt_tokens,
-                input_tokens_details=NeMoGymResponseInputTokensDetails(cached_tokens=0),
+                input_tokens_details=NeMoGymResponseInputTokensDetails(
+                    cached_tokens=cached_tokens if cached_tokens is not None else 0,
+                ),
                 output_tokens=chat_completion.usage.completion_tokens,
-                output_tokens_details=NeMoGymResponseOutputTokensDetails(reasoning_tokens=0),
-                total_tokens=chat_completion.usage.prompt_tokens + chat_completion.usage.completion_tokens,
+                output_tokens_details=NeMoGymResponseOutputTokensDetails(
+                    reasoning_tokens=reasoning_tokens if reasoning_tokens is not None else 0
+                ),
+                # Provider totals can use accounting that differs from prompt + completion.
+                total_tokens=chat_completion.usage.total_tokens,
             )
 
         incomplete_details = None

@@ -203,6 +203,7 @@ def test_extracts_nested_tree_model_refs_and_parallel_tool_timing(tmp_path: Path
     assert timings["tool-grandchild"].duration_ms == pytest.approx(1000)
     assert timings["tool-grandchild"].status == "timeout"
     assert all(tool.timing_source == "artifact" for tool in timings.values())
+    assert all(tool.output == "result" for tool in timings.values())
     assert bundle.gaps == []
 
 

@@ -191,9 +191,12 @@ Rollout example
 }
 ```
 
+> Empty `*_tokens_per_turn` arrays are response placeholders, not measured zero-token turns. Use
+> [trajectory capture](https://docs.nvidia.com/nemo/gym/main/about/concepts/trajectory-format) for standardized turn and
+> model-call usage.
+
 ### Implementation notes
 - The server extracts the last assistant message's text from the Responses output.
 
 ## Licensing information
 Code: Apache 2.0
-

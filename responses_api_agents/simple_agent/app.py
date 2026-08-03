@@ -13,7 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import json
-from typing import List
+from time import perf_counter, time
+from typing import Any, List
+from uuid import uuid4
 
 from fastapi import Request, Response
 from pydantic import ConfigDict, ValidationError
@@ -38,8 +40,18 @@ from nemo_gym.openai_utils import (
     NeMoGymResponseCreateParamsNonStreaming,
     NeMoGymResponseFunctionToolCall,
     NeMoGymResponseOutputMessage,
+    accumulate_response_usage,
+)
+from nemo_gym.rollout_correlation import maybe_rollout_id_from_run_body
+from nemo_gym.rollout_observability import (
+    AgentEpisode,
+    AgentInvocation,
+    AgentObservationBundle,
+    ModelCallRef,
+    TrajectoryTurn,
 )
 from nemo_gym.server_utils import get_response_json, raise_for_status
+from nemo_gym.tool_observability import ToolObservationRecorder, classify_http_status
 
 
 class SimpleAgentConfig(BaseResponsesAPIAgentConfig):
@@ -58,17 +70,26 @@ class SimpleAgentVerifyRequest(BaseVerifyRequest):
 
 class SimpleAgentVerifyResponse(BaseVerifyResponse):
     model_config = ConfigDict(extra="allow")
+    ng_agent_observations: AgentObservationBundle | None = None
 
 
 class SimpleAgent(SimpleResponsesAPIAgent):
     config: SimpleAgentConfig
 
-    async def responses(
+    async def _create_episode(
         self,
-        request: Request,
-        response: Response,
-        body: NeMoGymResponseCreateParamsNonStreaming = Body(),
-    ) -> NeMoGymResponse:
+        body: NeMoGymResponseCreateParamsNonStreaming,
+        *,
+        model_url_path: str,
+        resources_server_cookies: Any = None,
+        task_id: str = "unscoped",
+        rollout_id: str = "unscoped",
+    ) -> tuple[AgentEpisode, Any, Any]:
+        started = perf_counter()
+        invocation_id = str(uuid4())
+        recorder: ToolObservationRecorder[Any] = ToolObservationRecorder(invocation_id)
+        model_calls: list[ModelCallRef] = []
+        turns: list[TrajectoryTurn] = []
         body = body.model_copy(deep=True)
 
         if isinstance(body.input, str):
@@ -77,16 +98,16 @@ class SimpleAgent(SimpleResponsesAPIAgent):
         new_outputs = []
         usage = None
         step = 0
-        model_server_cookies = None  # update the cookies on every model response
-        resources_server_cookies = request.cookies  # update the cookies on every resources server response
+        model_server_cookies = None
 
         while True:
             step += 1
             new_body = body.model_copy(update={"input": body.input + new_outputs})
+            turn_timestamp = time()
 
             model_response = await self.server_client.post(
                 server_name=self.config.model_server.name,
-                url_path=self.url_path_for_request("/v1/responses", request),
+                url_path=model_url_path,
                 json=new_body,
                 cookies=model_server_cookies,
             )
@@ -101,21 +122,27 @@ class SimpleAgent(SimpleResponsesAPIAgent):
                     f"Received an invalid response from model server: {json.dumps(model_response_json)}"
                 ) from e
 
+            model_call_ref = ModelCallRef(model_ref=self.config.model_server, response_id=model_response.id)
+            model_calls.append(model_call_ref)
             output = model_response.output
             new_outputs.extend(output)
+            reasoning = [item.model_dump(mode="json") for item in output if item.type == "reasoning"] or None
+            turn = TrajectoryTurn(
+                invocation_id=invocation_id,
+                task_id=task_id,
+                rollout_id=rollout_id,
+                turn_no=step,
+                timestamp=turn_timestamp,
+                question=new_body.input,
+                answer=output,
+                reasoning_content=reasoning,
+                step_count=len(recorder.records),
+                model_calls=[model_call_ref],
+            )
+            turns.append(turn)
 
-            if not usage:
-                usage = model_response.usage
-                model_response.usage = None
-
-            if usage and model_response.usage:
-                usage.input_tokens += model_response.usage.input_tokens
-                usage.output_tokens += model_response.usage.output_tokens
-                usage.total_tokens += model_response.usage.total_tokens
-
-                # TODO support more advanced token details
-                usage.input_tokens_details.cached_tokens = 0
-                usage.output_tokens_details.reasoning_tokens = 0
+            usage = accumulate_response_usage(usage, model_response.usage)
+            model_response.usage = None
 
             if model_response.incomplete_details:
                 break
@@ -135,43 +162,94 @@ class SimpleAgent(SimpleResponsesAPIAgent):
                     # error back as a tool response so the rollout can continue
                     # (or terminate with a low reward) instead of crashing the
                     # whole batch on json.loads.
+                    argument_error_type = type(e).__name__
+                    # Use repr(e) so the exception type name is always
+                    # included even when str(e) would be empty.
+                    tool_output = json.dumps({"error": f"Invalid tool call arguments: {e!r}"})
+
+                    async def malformed_arguments() -> None:
+                        return None
+
+                    _, observation = await recorder.run(
+                        malformed_arguments,
+                        tool_call_id=output_function_call.call_id,
+                        tool_name=output_function_call.name,
+                        classify_result=lambda _: ("failed", argument_error_type),
+                    )
+                    observation.output = tool_output
                     tool_response = NeMoGymFunctionCallOutput(
                         type="function_call_output",
                         call_id=output_function_call.call_id,
-                        # Use repr(e) so the exception type name is always
-                        # included even when str(e) would be empty.
-                        output=json.dumps({"error": f"Invalid tool call arguments: {e!r}"}),
+                        output=tool_output,
                     )
                     new_outputs.append(tool_response)
                     continue
 
-                api_response = await self.server_client.post(
-                    server_name=self.config.resources_server.name,
-                    url_path=f"/{output_function_call.name}",
-                    json=parsed_arguments,
-                    cookies=resources_server_cookies,
+                # We don't raise for status here since resource-server errors are valid tool outputs.
+                async def execute_tool() -> tuple[Any, str]:
+                    api_response = await self.server_client.post(
+                        server_name=self.config.resources_server.name,
+                        url_path=f"/{output_function_call.name}",
+                        json=parsed_arguments,
+                        cookies=resources_server_cookies,
+                    )
+                    return api_response, (await api_response.content.read()).decode()
+
+                (api_response, tool_output), observation = await recorder.run(
+                    execute_tool,
+                    tool_call_id=output_function_call.call_id,
+                    tool_name=output_function_call.name,
+                    classify_result=lambda result: classify_http_status(result[0].status),
                 )
-                # We don't raise for status here since it's a valid return for the API to error e.g. if the model outputs an invalid call or something.
                 resources_server_cookies = api_response.cookies
+                observation.output = tool_output
 
                 tool_response = NeMoGymFunctionCallOutput(
                     type="function_call_output",
                     call_id=output_function_call.call_id,
-                    output=(await api_response.content.read()).decode(),
+                    output=tool_output,
                 )
                 new_outputs.append(tool_response)
 
             # Check if max steps is not None and if we have exhausted it.
+            turn.step_count = len(recorder.records)
             if self.config.max_steps and step >= self.config.max_steps:
                 break
 
+        model_response.output = new_outputs
+        model_response.usage = usage
+        invocation = AgentInvocation(
+            invocation_id=invocation_id,
+            status="completed",
+            duration_ms=(perf_counter() - started) * 1000,
+            model_calls=model_calls,
+            conversation=[*body.input, *new_outputs],
+        )
+        observations = AgentObservationBundle(
+            source="simple_agent",
+            records=[invocation, *turns, *recorder.records],
+        )
+        return (
+            AgentEpisode(response=model_response, observations=observations),
+            model_server_cookies,
+            resources_server_cookies,
+        )
+
+    async def responses(
+        self,
+        request: Request,
+        response: Response,
+        body: NeMoGymResponseCreateParamsNonStreaming = Body(),
+    ) -> NeMoGymResponse:
+        episode, model_server_cookies, resources_server_cookies = await self._create_episode(
+            body,
+            model_url_path=self.url_path_for_request("/v1/responses", request),
+            resources_server_cookies=request.cookies,
+        )
         # Propogate any extra cookies necessary for downstream verification
         for k, v in (*resources_server_cookies.items(), *model_server_cookies.items()):
             response.set_cookie(k, v)
-
-        model_response.output = new_outputs
-        model_response.usage = usage
-        return model_response
+        return episode.response
 
     async def run(self, request: Request, body: SimpleAgentRunRequest) -> SimpleAgentVerifyResponse:
         cookies = request.cookies
@@ -185,17 +263,27 @@ class SimpleAgent(SimpleResponsesAPIAgent):
         await raise_for_status(seed_session_response)
         cookies = seed_session_response.cookies
 
-        response = await self.server_client.post(
-            server_name=self.config.name,
-            url_path=self.url_path_for_run("/v1/responses", body),
-            json=body.responses_create_params,
-            cookies=cookies,
+        extra = body.model_extra or {}
+        task_id = next(
+            (
+                str(extra[key])
+                for key in ("task_id", "problem_id", "instance_id", "_ng_task_index")
+                if extra.get(key) is not None
+            ),
+            "unknown",
         )
-        await raise_for_status(response)
-        cookies = response.cookies
+        episode, model_server_cookies, cookies = await self._create_episode(
+            body.responses_create_params,
+            model_url_path=self.url_path_for_run("/v1/responses", body),
+            resources_server_cookies=cookies,
+            task_id=task_id,
+            rollout_id=maybe_rollout_id_from_run_body(body) or "unknown",
+        )
+        if model_server_cookies:
+            cookies.update(model_server_cookies)
 
         verify_request = SimpleAgentVerifyRequest.model_validate(
-            body.model_dump() | {"response": await get_response_json(response)}
+            body.model_dump() | {"response": episode.response.model_dump(mode="json")}
         )
 
         verify_response = await self.server_client.post(
@@ -205,7 +293,13 @@ class SimpleAgent(SimpleResponsesAPIAgent):
             cookies=cookies,
         )
         await raise_for_status(verify_response)
-        return SimpleAgentVerifyResponse.model_validate(await get_response_json(verify_response))
+        result = await get_response_json(verify_response)
+        resolved = result.get("resolved")
+        turn_records = [record for record in episode.observations.records if isinstance(record, TrajectoryTurn)]
+        if isinstance(resolved, bool) and turn_records:
+            turn_records[-1].resolved = resolved
+        result["ng_agent_observations"] = episode.observations.model_dump(mode="json")
+        return SimpleAgentVerifyResponse.model_validate(result)
 
     async def aggregate_metrics(self, body: AggregateMetricsRequest = Body()) -> AggregateMetrics:
         """Proxy aggregate_metrics to the resources server."""

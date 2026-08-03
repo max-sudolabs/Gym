@@ -15,7 +15,7 @@
 """Unit tests for the shared Responses API <-> Chat Completions converter."""
 
 import pytest
-from openai.types.completion_usage import CompletionUsage
+from openai.types.completion_usage import CompletionTokensDetails, CompletionUsage, PromptTokensDetails
 
 from nemo_gym.openai_utils import (
     NeMoGymChatCompletion,
@@ -566,6 +566,55 @@ def test_chat_completion_to_response_sanity(converter: ResponsesConverter):
     )
 
     assert expected_response == actual_response
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        CompletionUsage(
+            prompt_tokens=11,
+            completion_tokens=5,
+            total_tokens=19,
+            prompt_tokens_details=PromptTokensDetails(cached_tokens=7),
+            completion_tokens_details=CompletionTokensDetails(reasoning_tokens=3),
+        ),
+        CompletionUsage.model_validate(
+            {
+                "prompt_tokens": 11,
+                "completion_tokens": 5,
+                "total_tokens": 19,
+                "cached_input_tokens": 7,
+                "reasoning_output_tokens": 3,
+            }
+        ),
+    ],
+    ids=["nested-details", "top-level-aliases"],
+)
+def test_chat_completion_to_response_preserves_provider_usage_details(
+    converter: ResponsesConverter, usage: CompletionUsage
+):
+    response = converter.chat_completion_to_response(
+        responses_create_params=NeMoGymResponseCreateParamsNonStreaming(model="m", input="hello"),
+        chat_completion=NeMoGymChatCompletion(
+            id="chat",
+            created=0,
+            model="m",
+            object="chat.completion",
+            choices=[
+                NeMoGymChoice(
+                    index=0,
+                    finish_reason="stop",
+                    message=NeMoGymChatCompletionMessage(role="assistant", content="done"),
+                )
+            ],
+            usage=usage,
+        ),
+    )
+
+    assert response.usage is not None
+    assert response.usage.total_tokens == 19
+    assert response.usage.input_tokens_details.cached_tokens == 7
+    assert response.usage.output_tokens_details.reasoning_tokens == 3
 
 
 # ===========================================================================

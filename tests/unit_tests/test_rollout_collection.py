@@ -36,6 +36,8 @@ from nemo_gym.rollout_collection import (
     RolloutAggregationHelper,
     RolloutCollectionConfig,
     RolloutCollectionHelper,
+    _attach_trajectory_record,
+    _build_trajectory_record,
     _expand_input_glob,
     _failures_path_for,
     _get_max_rollout_attempts,
@@ -97,6 +99,190 @@ class TestRolloutCollection:
             TASK_INDEX_KEY_NAME: 12,
             ROLLOUT_INDEX_KEY_NAME: 3,
         }
+
+    def test_build_trajectory_record_standardizes_calls_turns_and_tools(self) -> None:
+        row = {
+            TASK_INDEX_KEY_NAME: 2,
+            ROLLOUT_INDEX_KEY_NAME: 3,
+            "task_id": "task-2",
+        }
+        result = {
+            "resolved": True,
+            "ng_model_call_capture": {
+                "calls": [
+                    {
+                        "model_call_id": "model-1",
+                        "response_id": "response-1",
+                        "status_code": 200,
+                        "started_at": 10.0,
+                        "completed_at": 11.0,
+                        "latency_total_ms": 1000.0,
+                        "request": {"input": [{"role": "user", "content": "question"}]},
+                        "response": {"output": [{"type": "message", "content": "answer"}]},
+                        "tokens_in": 10,
+                        "tokens_out": 5,
+                        "tokens_reasoning": 2,
+                        "tokens_total": 15,
+                        "cached_tokens": 3,
+                    },
+                    {
+                        "model_call_id": "model-2",
+                        "request": None,
+                        "response": None,
+                        "request_raw": "raw request",
+                        "response_raw": "raw response",
+                    },
+                ]
+            },
+            "ng_agent_observations": {
+                "source": "test",
+                "records": [
+                    {
+                        "kind": "agent_invocation",
+                        "invocation_id": "root",
+                        "conversation": [{"role": "user", "content": "question"}],
+                    },
+                    {
+                        "kind": "turn",
+                        "invocation_id": "root",
+                        "task_id": "task-2",
+                        "rollout_id": "2-3",
+                        "turn_no": 2,
+                        "timestamp": 11.0,
+                        "question": "follow-up",
+                        "answer": "final answer",
+                        "resolved": True,
+                        "step_count": 2,
+                        "model_calls": [{"model_call_id": "model-2"}],
+                    },
+                    {
+                        "kind": "turn",
+                        "invocation_id": "root",
+                        "task_id": "task-2",
+                        "rollout_id": "2-3",
+                        "turn_no": 1,
+                        "timestamp": 10.0,
+                        "question": "question",
+                        "answer": "answer",
+                        "resolved": None,
+                        "step_count": 1,
+                        "model_calls": [{"model_call_id": "model-1"}],
+                    },
+                    {
+                        "kind": "tool_call",
+                        "invocation_id": "root",
+                        "tool_call_id": "tool-1",
+                        "output": "result",
+                        "status": "completed",
+                        "started_at": 10.2,
+                        "completed_at": 10.4,
+                        "duration_ms": 200.0,
+                    },
+                ],
+            },
+        }
+
+        trajectory = _build_trajectory_record(row, result)
+
+        assert (trajectory.task_id, trajectory.rollout_id, trajectory.attempt_no) == ("task-2", "2-3", 1)
+        assert trajectory.model_calls[0].turn_no == 1
+        assert trajectory.model_calls[0].request == result["ng_model_call_capture"]["calls"][0]["request"]
+        assert trajectory.model_calls[1].request == "raw request"
+        assert trajectory.model_calls[1].response == "raw response"
+        assert trajectory.model_calls[1].turn_no == 2
+        assert trajectory.model_calls[0].token_stats.model_dump() == {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "reasoning_tokens": 2,
+            "total_tokens": 15,
+            "cached_tokens": 3,
+        }
+        assert [turn.turn_no for turn in trajectory.turns] == [1, 2]
+        assert trajectory.turns[-1].resolved is True and trajectory.step_count == 2
+        assert trajectory.tool_calls[0].duration_ms == 200.0
+
+    def test_trajectory_projection_failure_preserves_rollout(self) -> None:
+        row = {TASK_INDEX_KEY_NAME: 2, ROLLOUT_INDEX_KEY_NAME: 3}
+        result = {
+            "ng_model_call_capture": {
+                "calls": [
+                    {
+                        "model_call_id": "model-1",
+                        "latency_total_ms": -1,
+                        "request": {"input": "question"},
+                        "response": {"output": "answer"},
+                    }
+                ]
+            }
+        }
+
+        _attach_trajectory_record(row, result)
+
+        assert "ng_trajectory" not in result
+        assert result["ng_model_call_capture"]["gaps"][-1]["code"] == "trajectory_projection_failed"
+        assert result["ng_model_call_capture"]["calls"][0]["request"] == {"input": "question"}
+
+        malformed_result = {"ng_model_call_capture": {"calls": 1}}
+        _attach_trajectory_record(row, malformed_result)
+        assert malformed_result["ng_model_call_capture"]["gaps"][-1]["code"] == "trajectory_projection_failed"
+
+    def test_trajectory_does_not_guess_between_multiple_roots(self) -> None:
+        row = {TASK_INDEX_KEY_NAME: 2, ROLLOUT_INDEX_KEY_NAME: 3}
+        result = {
+            "ng_agent_observations": {
+                "source": "test",
+                "records": [
+                    {"kind": "agent_invocation", "invocation_id": "orphan", "conversation": []},
+                    {
+                        "kind": "agent_invocation",
+                        "invocation_id": "root",
+                        "conversation": [{"role": "user", "content": "question"}],
+                    },
+                    {
+                        "kind": "turn",
+                        "invocation_id": "root",
+                        "task_id": "wrong",
+                        "rollout_id": "2-3",
+                        "turn_no": 1,
+                        "timestamp": 1.0,
+                        "step_count": 0,
+                    },
+                ],
+            }
+        }
+
+        trajectory = _build_trajectory_record(row, result)
+
+        assert trajectory.conversation == []
+        assert trajectory.turns == []
+        assert {"root_invocation_ambiguous", "turn_identity_mismatch"} <= {gap.code for gap in trajectory.gaps}
+
+    def test_trajectory_does_not_guess_duplicate_turn_ownership(self) -> None:
+        row = {TASK_INDEX_KEY_NAME: 2, ROLLOUT_INDEX_KEY_NAME: 3}
+        result = {
+            "ng_model_call_capture": {"calls": [{"model_call_id": "shared"}]},
+            "ng_agent_observations": {
+                "source": "test",
+                "records": [
+                    {
+                        "kind": "turn",
+                        "invocation_id": invocation_id,
+                        "task_id": "2",
+                        "rollout_id": "2-3",
+                        "turn_no": turn_no,
+                        "timestamp": float(turn_no),
+                        "step_count": turn_no,
+                        "model_calls": [{"model_call_id": "shared"}],
+                    }
+                    for invocation_id, turn_no in (("root", 1), ("child", 2))
+                ],
+            },
+        }
+
+        trajectory = _build_trajectory_record(row, result)
+
+        assert trajectory.model_calls[0].turn_no is None
+        assert "model_call_turn_ambiguous" in {gap.code for gap in trajectory.gaps}
 
     @pytest.mark.parametrize("request_debug_enabled", [True, False])
     async def test_run_examples_logs_failed_run_when_request_debug_enabled(
@@ -712,6 +898,9 @@ class TestRolloutCollection:
 
         assert [exchange["model_call_id"] for exchange in store.read("0-0")] == ["fresh"]
         assert [call["model_call_id"] for call in results[0]["ng_model_call_capture"]["calls"]] == ["fresh"]
+        assert results[0]["ng_trajectory"]["model_calls"][0]["request"] == {}
+        assert results[0]["ng_trajectory"]["model_calls"][0]["response"] == {}
+        assert "request" not in results[0]["ng_model_call_capture"]["calls"][0]
 
     async def test_run_from_config_sorted(self, tmp_path: Path, empty_global_config: MagicMock) -> None:
         input_jsonl_fpath = tmp_path / "input.jsonl"
@@ -1000,6 +1189,7 @@ class TestRolloutCollection:
                 "response": {"usage": {"tokens": 10}},
                 "ng_agent_observations": {"invocations": [{"conversation": ["large"]}]},
                 "ng_model_call_capture": {"calls": [{"request": "large"}]},
+                "ng_trajectory": {"model_calls": [{"request": "large"}]},
             },
             {TASK_INDEX_KEY_NAME: 0, ROLLOUT_INDEX_KEY_NAME: 1, "reward": 0.0, "response": {"usage": {"tokens": 12}}},
             {TASK_INDEX_KEY_NAME: 1, ROLLOUT_INDEX_KEY_NAME: 0, "reward": 1.0, "response": {"usage": {"tokens": 8}}},
@@ -1031,6 +1221,7 @@ class TestRolloutCollection:
             assert "responses_create_params" not in item
             assert "ng_agent_observations" not in item
             assert "ng_model_call_capture" not in item
+            assert "ng_trajectory" not in item
             assert "usage" in item["response"]
 
     async def test_call_aggregate_metrics_multiple_agents(

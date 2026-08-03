@@ -378,6 +378,7 @@ def extract_claude_code_observations(
 
     starts: dict[tuple[str, str], list[tuple[float | None, str]]] = defaultdict(list)
     finishes: dict[tuple[str, str], list[tuple[float | None, str]]] = defaultdict(list)
+    tool_outputs: dict[tuple[str, str], Any] = {}
     parents: dict[str, tuple[str, str, str, int]] = {}
     ambiguous_parents: set[str] = set()
     conversations: dict[str, list[Any]] = defaultdict(list)
@@ -511,7 +512,9 @@ def extract_claude_code_observations(
                             add_gap("tool_result_id_missing")
                             continue
                         tool_status = _status(block, result_metadata)
-                        items.append(_tool_result(block, tool_status))
+                        tool_result = _tool_result(block, tool_status)
+                        items.append(tool_result)
+                        tool_outputs[(invocation_id, tool_call_id)] = tool_result.output
                         finishes[(invocation_id, tool_call_id)].append(
                             (_timestamp(event.get("timestamp")), tool_status)
                         )
@@ -609,6 +612,7 @@ def extract_claude_code_observations(
                 duration_ms=duration_ms,
                 timing_source="artifact" if started_at is not None or completed_at is not None else None,
                 status=tool_status,
+                output=tool_outputs.get((invocation_id, tool_call_id)),
             )
         )
 

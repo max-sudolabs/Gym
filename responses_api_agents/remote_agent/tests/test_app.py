@@ -71,8 +71,8 @@ def traj(output: list, usage: dict | None = "default") -> dict:
             "input_tokens": 10,
             "output_tokens": 5,
             "total_tokens": 15,
-            "input_tokens_details": {"cached_tokens": 0},
-            "output_tokens_details": {"reasoning_tokens": 0},
+            "input_tokens_details": {"cached_tokens": 2},
+            "output_tokens_details": {"reasoning_tokens": 1},
         }
     if usage is not None:
         t["usage"] = usage
@@ -473,6 +473,8 @@ class TestAgentToolLoop:
 
         usage = result.model_dump()["response"]["usage"]
         assert usage["input_tokens"] == 20 and usage["output_tokens"] == 10 and usage["total_tokens"] == 30
+        assert usage["input_tokens_details"]["cached_tokens"] == 4
+        assert usage["output_tokens_details"]["reasoning_tokens"] == 2
 
     async def test_string_input_coerced_to_message(self, monkeypatch: pytest.MonkeyPatch) -> None:
         service = scripted_service(_MINIMAL_TRAJECTORY)

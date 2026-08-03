@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Small shared contract for observations exposed by Agent integrations."""
+"""Shared contracts for rollout observations and trajectories."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Annotated, Literal, Optional
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -37,6 +37,55 @@ class ModelCallRef(ObservationModel):
         return self
 
 
+class TrajectoryTokenStats(ObservationModel):
+    prompt_tokens: Optional[int] = Field(default=None, ge=0)
+    completion_tokens: Optional[int] = Field(default=None, ge=0)
+    reasoning_tokens: Optional[int] = Field(default=None, ge=0)
+    total_tokens: Optional[int] = Field(default=None, ge=0)
+    cached_tokens: Optional[int] = Field(default=None, ge=0)
+
+
+class TrajectoryResponseMetadata(ObservationModel):
+    response_id: Optional[str] = None
+    model_ref: Optional[ModelServerRef] = None
+    model: Optional[str] = None
+    dialect: Optional[str] = None
+    status_code: Optional[int] = None
+    finish_reason: Optional[str] = None
+    error_category: Optional[str] = None
+    cache_hit: Optional[bool] = None
+    latency_ttft_ms: Optional[float] = Field(default=None, ge=0)
+    reasoning_content: Optional[str] = None
+
+
+class TrajectoryModelCall(ObservationModel):
+    model_call_id: Optional[str] = None
+    turn_no: Optional[int] = Field(default=None, ge=1)
+    started_at: Optional[float] = None
+    completed_at: Optional[float] = None
+    duration_ms: Optional[float] = Field(default=None, ge=0)
+    request: Optional[Any] = None
+    response: Optional[Any] = None
+    status: Literal["completed", "failed", "incomplete", "unknown"] = "unknown"
+    response_metadata: TrajectoryResponseMetadata = Field(default_factory=TrajectoryResponseMetadata)
+    token_stats: TrajectoryTokenStats = Field(default_factory=TrajectoryTokenStats)
+
+
+class TrajectoryTurn(ObservationModel):
+    kind: Literal["turn"] = "turn"
+    invocation_id: str
+    task_id: str
+    rollout_id: str
+    turn_no: int = Field(ge=1)
+    timestamp: float
+    question: Optional[Any] = None
+    answer: Optional[Any] = None
+    reasoning_content: Optional[Any] = None
+    resolved: Optional[bool] = None
+    step_count: int = Field(ge=0)
+    model_calls: list[ModelCallRef] = Field(default_factory=list)
+
+
 class AgentInvocation(ObservationModel):
     """One root Agent or subagent conversation observed by a harness."""
 
@@ -57,7 +106,7 @@ class AgentInvocation(ObservationModel):
 
 
 class ToolCallObservation(ObservationModel):
-    """Timing observed for one tool call at an Agent-owned boundary."""
+    """One tool attempt observed at an Agent-owned execution boundary."""
 
     kind: Literal["tool_call"] = "tool_call"
     invocation_id: str
@@ -73,6 +122,7 @@ class ToolCallObservation(ObservationModel):
     timing_source: Optional[Literal["executor", "artifact", "harness"]] = None
     status: Literal["completed", "failed", "timeout", "cancelled", "incomplete", "unknown"] = "unknown"
     error_type: Optional[str] = None
+    output: Optional[Any] = None
 
     @model_validator(mode="after")
     def validate_timing(self) -> "ToolCallObservation":
@@ -151,7 +201,7 @@ class ObservationGap(ObservationModel):
 
 
 AgentObservationRecord = Annotated[
-    AgentInvocation | ToolCallObservation | ContextCompactionObservation | SandboxObservation,
+    AgentInvocation | TrajectoryTurn | ToolCallObservation | ContextCompactionObservation | SandboxObservation,
     Field(discriminator="kind"),
 ]
 
@@ -188,6 +238,33 @@ class AgentObservationBundle(ObservationModel):
                     break
                 current = parent
             checked.update(chain)
+        return self
+
+
+class TrajectoryRecord(ObservationModel):
+    schema_version: Literal["1.0"] = "1.0"
+    task_id: str
+    rollout_id: str
+    attempt_no: int = Field(ge=1)
+    created_at: float
+    turns: list[TrajectoryTurn] = Field(default_factory=list)
+    model_calls: list[TrajectoryModelCall] = Field(default_factory=list)
+    tool_calls: list[ToolCallObservation] = Field(default_factory=list)
+    conversation: list[NeMoGymResponseInputItem] = Field(default_factory=list)
+    resolved: Optional[bool] = None
+    step_count: int = Field(ge=0)
+    gaps: list[ObservationGap] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_turns(self) -> "TrajectoryRecord":
+        keys: set[tuple[str, int]] = set()
+        for turn in self.turns:
+            if turn.task_id != self.task_id or turn.rollout_id != self.rollout_id:
+                raise ValueError("turn identity must match the trajectory")
+            key = (turn.invocation_id, turn.turn_no)
+            if key in keys:
+                raise ValueError("turn number must be unique within an invocation")
+            keys.add(key)
         return self
 
 

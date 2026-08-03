@@ -1,0 +1,87 @@
+---
+title: "Trajectory capability matrix"
+description: "Standardized trajectory support by criterion, producer, and follow-up pull request"
+position: 5
+---
+
+# Trajectory capability matrix
+
+<Warning>
+A schema can represent evidence that a producer does not emit. Treat a capability as supported only when the producer
+integration supplies it and its tests cover the relevant boundary.
+</Warning>
+
+## Acceptance criteria
+
+| ID | Current support | Remaining limitation |
+|---|---|---|
+| C1 — standard model-call schema | `ng_trajectory.model_calls` uses standard token names, timing, status, request/response, and response metadata | Custom and direct-provider integrations must expose their calls to rollout collection |
+| C2 — complete token statistics | Shared capture and Responses conversion preserve provider-reported prompt, completion, reasoning, total, and cached counts | Inference Provider, Anthropic conversion, and custom adapters can still expose partial usage or API defaults |
+| C3 — standard per-turn fields | Turns contain task and rollout identity, turn number, timestamp, question, answer, reasoning content, resolution, and cumulative step count | Turn fidelity depends on exact producer ownership and history evidence |
+| C4 — reconstruct model-visible history | Captured model-server exchanges and the root invocation conversation are copied into `ng_trajectory` | Provider rendering, direct-provider calls, child invocations, stateful context, and incomplete compaction boundaries remain gaps |
+| C5 — complete tool observations | Tool attempts contain output, status, timestamps, duration, and errors | Most agents do not yet emit shared tool observations |
+| C6 — parallel tool timing | Independent tool-attempt intervals represent overlap | Producer coverage is limited; Simple Agent executes tools sequentially |
+| C7 — resource and sandbox integrations | The projection consumes the shared observation contract; Simple Agent is the resource-server reference | CLI, remote, imported, and sandbox-backed producers remain partial |
+
+Rollout collection adds `ng_trajectory` when model-call capture or agent observations are present. Model-call evidence
+requires calls to use a rollout-prefixed Gym Model Server with capture enabled.
+
+## Follow-up pull requests
+
+Open rows describe intended evidence, not current support.
+
+| PR | Producers | Intended evidence | State |
+|---|---|---|---|
+| [#2114](https://github.com/NVIDIA-NeMo/Gym/pull/2114) | Shared contract | Invocation, tool, compaction, sandbox, and model-call correlation records | Merged |
+| [#2153](https://github.com/NVIDIA-NeMo/Gym/pull/2153) | Claude Code | Conversation ownership, invocation tree, tool intervals, and compaction | Merged |
+| [#2115](https://github.com/NVIDIA-NeMo/Gym/pull/2115) | OpenClaw, PinchBench | Conversation/tree/tool intervals and partial sandbox outcome | Open |
+| [#2116](https://github.com/NVIDIA-NeMo/Gym/pull/2116) | Claude Code | Earlier Claude proposal | Superseded by #2153; not merged to `main` |
+| [#2117](https://github.com/NVIDIA-NeMo/Gym/pull/2117) | Hermes | Child invocations, model ownership, tool intervals, and compaction | Open |
+| [#2118](https://github.com/NVIDIA-NeMo/Gym/pull/2118) | Pi | Response ownership, overlapping tool intervals, and compaction | Open |
+| [#2119](https://github.com/NVIDIA-NeMo/Gym/pull/2119) | OpenCode | Sessions, child relations, history, tool intervals, and compaction | Open |
+| [#2120](https://github.com/NVIDIA-NeMo/Gym/pull/2120) | SWE Agents (OpenHands) | Session ownership and partial sandbox outcome | Open |
+| #2121 | — | — | No public implementation |
+| [#2122](https://github.com/NVIDIA-NeMo/Gym/pull/2122) | Stirrup/GDPVal, Tau2 | Auxiliary model-call correlation | Open |
+
+## Agent coverage
+
+“Model capture” means conditional capture at a rollout-prefixed Gym Model Server. It does not include tool execution or
+semantic turns.
+
+| Agent | Shared evidence | Follow-up | Main gap |
+|---|---|---|---|
+| `anyswe_agent` | None | — | Inner-agent calls, exact context, tools, and sandbox lifecycle |
+| `anyterminal_agent` | None | — | Sandbox transcript, tool attempts, and outcome |
+| `aviary_agent` | Model capture | — | Resource-tool timing, output, and turns |
+| `browsecomp_agent` | Model capture | — | Tool timing and exact pre-compaction history |
+| `claude_code_agent` | Invocation tree, conversation, model ownership, tool intervals, compaction | #2153 merged; #2116 superseded | Sandbox usage and exact compaction contexts |
+| `codex_agent` | None | — | CLI model usage, tool attempts, and sandbox evidence |
+| `critpt_agent` | Model capture | — | Standard identity and turns |
+| `cvdp_agent` | Model capture | — | Resource-tool timing and observations |
+| `finance_agent` | Model capture; usage-detail aggregation | — | Resource-tool timing and observations |
+| `gymnasium_agent` | Model capture; usage-detail aggregation | — | Environment-step timing and standard resolution turns |
+| `harbor_agent` | None | — | ATIF timing projection and shared turn/tool records |
+| `hermes_agent` | None | #2117 | Invocation, tool, and compaction producer |
+| `kilocode_agent` | None | — | CLI history, usage, tools, and compaction |
+| `labbench2_vlm_agent` | Model capture | — | Multimodal turn and resource-tool observations |
+| `langgraph_agent` | None | — | Graph node, model, tool, and turn callbacks |
+| `mini_swe_agent` | None | — | Sandbox transcript, tools, outcome, and usage |
+| `mini_swe_agent_2` | None | — | Sandbox transcript, tools, outcome, and usage |
+| `non_executing_simple_agent` | Model capture | — | Standard identity and turns; tools are not applicable |
+| `openclaw_agent` | None | #2115 | Conversation, invocation, tool, and compaction producer |
+| `opencode_agent` | None | #2119 | Exact call ownership, tools, usage, and compaction |
+| `pi_agent` | None | #2118 | Invocation, tool, and compaction producer |
+| `pinchbench` | None | #2115 | Provider-neutral sandbox and tool evidence |
+| `proof_refinement_agent` | Model capture | — | Standard identity and turns; tools can be not applicable |
+| `remote_agent` | Remote response usage-detail aggregation | — | Negotiation for model and tool evidence produced outside Gym boundaries |
+| `scicode_agent` | Model capture | — | Resource-tool observations and standard turns |
+| `simple_agent` | Model ownership, conversation, and tool output/status/timing | Included with trajectory schema | Sequential tools; no sandbox usage |
+| `speed_bench_agent` | Model capture | — | Standard turns and identity |
+| `stirrup_agent` | Policy-call correlation | #2122; [#2134](https://github.com/NVIDIA-NeMo/Gym/pull/2134) merged in part | Judge calls, tools, and sandbox evidence |
+| `swe_agents` | Agent-specific session metrics only | #2120 | Shared model ownership, tool timing, and sandbox evidence |
+| `tau2` | Agent/user-simulator call correlation | #2122; [#2051](https://github.com/NVIDIA-NeMo/Gym/pull/2051) merged in part | Canonical steps, usage, tools, and outcome |
+| `tool_simulation_agent` | Model capture | — | Shared simulator-tool timing and output |
+| `toolsandbox_agent` | None | — | ToolSandbox timing, output, errors, overlap, and session identity |
+| `verifiers_agent` | Model capture | — | Local per-turn counters are not shared trajectory turns |
+
+Trajectory consumers must distinguish unavailable values from measured zeros.

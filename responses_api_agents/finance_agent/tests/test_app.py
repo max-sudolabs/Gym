@@ -559,16 +559,16 @@ class TestResponses:
 
         usage1 = {
             "input_tokens": 10,
-            "input_tokens_details": {"cached_tokens": 0},
+            "input_tokens_details": {"cached_tokens": 2},
             "output_tokens": 20,
-            "output_tokens_details": {"reasoning_tokens": 0},
+            "output_tokens_details": {"reasoning_tokens": 3},
             "total_tokens": 30,
         }
         usage2 = {
             "input_tokens": 100,
-            "input_tokens_details": {"cached_tokens": 0},
+            "input_tokens_details": {"cached_tokens": 5},
             "output_tokens": 200,
-            "output_tokens_details": {"reasoning_tokens": 0},
+            "output_tokens_details": {"reasoning_tokens": 7},
             "total_tokens": 300,
         }
 
@@ -583,6 +583,8 @@ class TestResponses:
         assert u["input_tokens"] == 110
         assert u["output_tokens"] == 220
         assert u["total_tokens"] == 330
+        assert u["input_tokens_details"] == {"cached_tokens": 7}
+        assert u["output_tokens_details"] == {"reasoning_tokens": 10}
 
     def test_string_input_converted_to_message(self) -> None:
         """String input is automatically wrapped in a user message.

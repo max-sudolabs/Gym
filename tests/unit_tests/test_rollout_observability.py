@@ -14,6 +14,9 @@ from nemo_gym.rollout_observability import (
     ObservationGap,
     SandboxObservation,
     ToolCallObservation,
+    TrajectoryModelCall,
+    TrajectoryRecord,
+    TrajectoryTurn,
     join_model_call_observations,
 )
 
@@ -62,6 +65,26 @@ def test_observation_models_reject_unknown_fields() -> None:
     with pytest.raises(ValidationError, match="producer_extension"):
         ModelCallRef.model_validate({"model_call_id": "call-1", "producer_extension": "unexpected"})
 
+    with pytest.raises(ValidationError, match="unexpected"):
+        TrajectoryModelCall(response_metadata={"unexpected": "value"})
+
+
+def test_trajectory_record_rejects_inconsistent_or_duplicate_turns() -> None:
+    turn = TrajectoryTurn(
+        invocation_id="root",
+        task_id="task",
+        rollout_id="0-0",
+        turn_no=1,
+        timestamp=1.0,
+        step_count=0,
+    )
+    with pytest.raises(ValidationError, match="turn identity"):
+        TrajectoryRecord(task_id="other", rollout_id="0-0", attempt_no=1, created_at=1.0, step_count=0, turns=[turn])
+    with pytest.raises(ValidationError, match="turn number"):
+        TrajectoryRecord(
+            task_id="task", rollout_id="0-0", attempt_no=1, created_at=1.0, step_count=0, turns=[turn, turn]
+        )
+
 
 @pytest.mark.parametrize(
     "timing",
@@ -73,6 +96,15 @@ def test_observation_models_reject_unknown_fields() -> None:
 def test_tool_call_observation_rejects_invalid_timing(timing: dict) -> None:
     with pytest.raises(ValidationError):
         ToolCallObservation(invocation_id="root", tool_call_id="call-1", **timing)
+
+
+def test_tool_call_observation_carries_output() -> None:
+    observation = ToolCallObservation(
+        invocation_id="root",
+        tool_call_id="call-1",
+        output={"value": 1},
+    )
+    assert observation.output == {"value": 1}
 
 
 def test_agent_invocation_rejects_negative_duration() -> None:

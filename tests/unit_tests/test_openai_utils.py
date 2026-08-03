@@ -24,10 +24,14 @@ from nemo_gym.openai_utils import (
     NeMoGymAsyncOpenAI,
     NeMoGymResponse,
     NeMoGymResponseCreateParamsNonStreaming,
+    NeMoGymResponseInputTokensDetails,
     NeMoGymResponseMcpApprovalRequest,
     NeMoGymResponseMcpCall,
     NeMoGymResponseMcpListTools,
+    NeMoGymResponseOutputTokensDetails,
+    NeMoGymResponseUsage,
     TokenIDLogProbMixin,
+    accumulate_response_usage,
 )
 
 
@@ -147,3 +151,35 @@ class TestRoutedExpertsWireFormats:
     def test_rejects_non_list_non_string(self) -> None:
         with pytest.raises(ValidationError):
             TokenIDLogProbMixin.model_validate({**self._BASE, "routed_experts": 42})
+
+
+def _usage(*, cached_tokens: int, reasoning_tokens: int) -> NeMoGymResponseUsage:
+    return NeMoGymResponseUsage(
+        input_tokens=10,
+        input_tokens_details=NeMoGymResponseInputTokensDetails(cached_tokens=cached_tokens),
+        output_tokens=5,
+        output_tokens_details=NeMoGymResponseOutputTokensDetails(reasoning_tokens=reasoning_tokens),
+        total_tokens=15,
+    )
+
+
+class TestAccumulateResponseUsage:
+    def test_sums_reported_details_without_mutating_inputs(self) -> None:
+        first = _usage(cached_tokens=0, reasoning_tokens=1)
+        second = _usage(cached_tokens=7, reasoning_tokens=4)
+
+        result = accumulate_response_usage(first, second)
+
+        assert result is not None and result is not first and result is not second
+        assert (result.input_tokens, result.output_tokens, result.total_tokens) == (20, 10, 30)
+        assert result.input_tokens_details.cached_tokens == 7
+        assert result.output_tokens_details.reasoning_tokens == 5
+        assert first.input_tokens == 10 and first.input_tokens_details.cached_tokens == 0
+
+    def test_handles_absent_aggregate_or_additional_usage(self) -> None:
+        reported = _usage(cached_tokens=7, reasoning_tokens=4)
+
+        first = accumulate_response_usage(None, reported)
+
+        assert first == reported and first is not reported
+        assert accumulate_response_usage(first, None) is first

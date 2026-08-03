@@ -1,0 +1,65 @@
+---
+title: "Trajectories and observability"
+description: "Understand standardized rollout trajectory records"
+position: 5
+---
+
+# Trajectories and observability
+
+A rollout is one execution of an agent on a task. A trajectory is its ordered record of model calls, agent turns, tool
+execution, and outcome.
+
+Rollout collection writes `ng_trajectory` when a result contains model-call capture or agent observations. The record uses
+schema version `1.0` and contains:
+
+- task, rollout, and attempt identity;
+- standardized model-call token statistics and response metadata;
+- agent turns with question, answer, reasoning content, resolution, and cumulative step count;
+- the root invocation conversation when the producer supplies it;
+- tool output, status, start and completion timestamps, and duration;
+- explicit gaps for unavailable evidence.
+
+The source attachments remain available under `ng_model_call_capture` and `ng_agent_observations`.
+`ng_trajectory` is written to rollout records and omitted from aggregate-metrics requests.
+
+## Enable model-call evidence
+
+```yaml
+observability_enabled: true
+model_call_capture_dir: /data/model-calls
+```
+
+Calls must use a `/ng-rollout/<rollout_id>` Gym Model Server prefix. Captured request and response payloads are included in
+the rollout trajectory as the model-server boundary exchange. Direct provider calls are outside this boundary.
+
+## Token statistics
+
+Each trajectory model call uses these names:
+
+```text
+prompt_tokens
+completion_tokens
+reasoning_tokens
+total_tokens
+cached_tokens
+```
+
+Unavailable captured details are `null` in `ng_trajectory`. Protocol adapters can retain API-required defaults.
+
+## Agent turns and tools
+
+Instrumented agent integrations can emit semantic turns and tool attempts through `ng_agent_observations`. Tool attempts retain independent
+timing, so overlapping calls can be represented without inferring duration from list order.
+
+Simple Agent is the reference resource-server integration. Other producers are listed in the
+[trajectory capability matrix](/reference/trajectory-capabilities).
+
+## Limitations
+
+Enabling model-call capture does not add agent-side tool or turn instrumentation. Unsupported boundaries remain explicit
+gaps in `ng_trajectory`. Provider-side rendering, stateful provider context, and context compaction can prevent exact
+history reconstruction. Child-invocation conversations remain in `ng_agent_observations` rather than the top-level
+trajectory conversation.
+
+Trajectory records can contain prompts, tool output, resolution status, and provider-exposed reasoning. Apply access and
+retention controls appropriate to the workload.
